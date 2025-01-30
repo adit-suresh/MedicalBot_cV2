@@ -7,6 +7,7 @@ from PIL import Image
 import pytesseract
 from pdf2image import convert_from_path
 import tempfile
+import shutil
 
 from config.settings import PROCESSED_DATA_DIR
 from config.constants import EMIRATES_ID_PATTERN, PASSPORT_NUMBER_PATTERN
@@ -18,10 +19,6 @@ class OCRProcessor:
     def __init__(self):
         self.processed_dir = PROCESSED_DATA_DIR
         os.makedirs(self.processed_dir, exist_ok=True)
-        
-        # Configure Tesseract
-        if os.getenv('TESSDATA_PREFIX'):
-            pytesseract.pytesseract.tesseract_cmd = os.getenv('TESSDATA_PREFIX')
 
     def process_document(self, file_path: str) -> Tuple[str, Dict[str, str]]:
         """
@@ -38,6 +35,11 @@ class OCRProcessor:
         try:
             file_ext = os.path.splitext(file_path)[1].lower()
             
+            # Skip Excel files
+            if file_ext in ['.xlsx', '.xls']:
+                logger.info(f"Skipping Excel file {file_path} - will be processed separately")
+                return file_path, {}
+            
             # Process based on file type
             if file_ext == '.pdf':
                 return self._process_pdf(file_path)
@@ -51,26 +53,18 @@ class OCRProcessor:
             raise OCRError(f"Failed to process document: {str(e)}")
 
     def _process_pdf(self, pdf_path: str) -> Tuple[str, Dict[str, str]]:
-        """Process PDF file using OCRmyPDF."""
+        """Process PDF file using pdf2image and Tesseract directly."""
         try:
             output_path = os.path.join(
                 self.processed_dir,
                 f"processed_{os.path.basename(pdf_path)}"
             )
 
-            # Run OCR on PDF
-            ocrmypdf.ocr(
-                pdf_path,
-                output_path,
-                deskew=True,
-                clean=True,
-                optimize=1,
-                language='eng+ara',  # Support both English and Arabic
-                force_ocr=True  # Force OCR even if text is present
-            )
+            # First, copy the original PDF to processed directory
+            shutil.copy2(pdf_path, output_path)
 
-            # Extract text from processed PDF
-            text = self._extract_text_from_pdf(output_path)
+            # Extract text using pdf2image and Tesseract
+            text = self._extract_text_from_pdf(pdf_path)
             extracted_data = self._extract_information(text)
 
             return output_path, extracted_data
@@ -92,8 +86,8 @@ class OCRProcessor:
             # Perform OCR
             text = pytesseract.image_to_string(
                 image,
-                lang='eng+ara',
-                config='--psm 3 --oem 3'  # Use neural net mode
+                lang='eng',  # Using only English for now
+                config='--psm 3'
             )
 
             # Save processed image
@@ -113,7 +107,7 @@ class OCRProcessor:
             raise OCRError(f"Failed to process image: {str(e)}")
 
     def _extract_text_from_pdf(self, pdf_path: str) -> str:
-        """Extract text from OCR-processed PDF using pdf2image and Tesseract."""
+        """Extract text from PDF using pdf2image and Tesseract."""
         try:
             text = ""
             # Convert PDF to images
@@ -129,8 +123,8 @@ class OCRProcessor:
                 for image in images:
                     page_text = pytesseract.image_to_string(
                         image,
-                        lang='eng+ara',
-                        config='--psm 3 --oem 3'
+                        lang='eng',  # Using only English for now
+                        config='--psm 3'
                     )
                     text += page_text + "\n"
             
@@ -159,8 +153,4 @@ class OCRProcessor:
             extracted_data['passport_number'] = match.group(0)
             logger.info(f"Found Passport Number: {match.group(0)}")
 
-        # Extract other potentially useful information
-        # Add more extraction patterns as needed
-
-        logger.info(f"Extracted {len(extracted_data)} pieces of information")
         return extracted_data
