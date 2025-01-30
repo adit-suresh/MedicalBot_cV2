@@ -9,3 +9,7 @@ class EmailFetchError(Exception):
 class AttachmentError(Exception):
     """Raised when there's an error processing attachments."""
     pass
+
+class OCRError(Exception):
+    """Raised when there's an error in OCR processing."""
+    pass

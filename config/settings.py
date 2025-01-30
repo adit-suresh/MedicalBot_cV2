@@ -8,10 +8,10 @@ GRAPH_API_ENDPOINT = "https://graph.microsoft.com/v1.0"
 CLIENT_ID = os.getenv("CLIENT_ID")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 TENANT_ID = os.getenv("TENANT_ID")
-SCOPE = ["https://graph.microsoft.com/.default"]
+USER_EMAIL = os.getenv("USER_EMAIL")
+TARGET_MAILBOX = os.getenv("TARGET_MAILBOX")  
 
 # Email settings
-EMAIL_FOLDER = "inbox"
 ATTACHMENT_TYPES = [".pdf", ".xlsx", ".xls", ".jpg", ".jpeg", ".png"]
 MAX_EMAIL_FETCH = 50  # Maximum number of emails to fetch in one go
 
@@ -24,4 +24,3 @@ LOG_DIR = os.path.join(BASE_DIR, "logs")
 # Create necessary directories
 for directory in [RAW_DATA_DIR, PROCESSED_DATA_DIR, LOG_DIR]:
     os.makedirs(directory, exist_ok=True)
-
