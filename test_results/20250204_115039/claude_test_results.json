@@ -1,0 +1,14 @@
+{
+  "test_time": "2025-02-04T11:50:39.340494",
+  "total_files": 1,
+  "successful": 0,
+  "failed": 1,
+  "processing_times": [],
+  "details": [
+    {
+      "filename": "all-you-need-know-about-emirates-id.jpg",
+      "success": false,
+      "error": "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}}"
+    }
+  ]
+}

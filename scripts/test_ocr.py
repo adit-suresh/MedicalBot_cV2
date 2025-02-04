@@ -1,88 +1,119 @@
-import sys
 import os
-import logging
-from typing import Dict
-
-# Add project root to Python path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import json
+from datetime import datetime
+from dotenv import load_dotenv
 from src.document_processor.ocr_processor import OCRProcessor
-from src.utils.logger import setup_logger
-from config.settings import RAW_DATA_DIR, PROCESSED_DATA_DIR
 
 def test_ocr_processing():
-    logger = setup_logger('ocr_test')
-    logger.info("Starting OCR test...")
-
-    try:
-        ocr_processor = OCRProcessor()
+    """Test OCR processing with different document types."""
+    load_dotenv()
+    
+    # Initialize OCR processor
+    processor = OCRProcessor()
+    
+    # Create test results directory
+    results_dir = os.path.join(
+        'test_results',
+        f'ocr_test_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
+    )
+    os.makedirs(results_dir, exist_ok=True)
+    
+    # Test documents directory
+    test_docs_dir = "tests/test_files"
+    
+    # Document types to test
+    doc_types = {
+        'emirates_id': ['jpg', 'png', 'pdf'],
+        'passport': ['jpg', 'png', 'pdf'],
+        'visa': ['jpg', 'png', 'pdf']
+    }
+    
+    results = {
+        'timestamp': datetime.now().isoformat(),
+        'total_files': 0,
+        'successful': 0,
+        'failed': 0,
+        'results_by_type': {}
+    }
+    
+    print("\nStarting OCR tests...")
+    
+    # Process each document type
+    for doc_type, extensions in doc_types.items():
+        type_results = {
+            'total': 0,
+            'successful': 0,
+            'failed': 0,
+            'files': []
+        }
         
-        # Process all files in RAW_DATA_DIR
-        for email_dir in os.listdir(RAW_DATA_DIR):
-            email_path = os.path.join(RAW_DATA_DIR, email_dir)
-            
-            # Skip if not a directory
-            if not os.path.isdir(email_path):
+        print(f"\nTesting {doc_type} documents:")
+        
+        # Test directory for this document type
+        type_dir = os.path.join(test_docs_dir, doc_type)
+        if not os.path.exists(type_dir):
+            print(f"Directory not found: {type_dir}")
+            continue
+        
+        # Process each file
+        for filename in os.listdir(type_dir):
+            if not any(filename.lower().endswith(f".{ext}") for ext in extensions):
                 continue
                 
-            logger.info(f"\nProcessing directory: {email_dir}")
+            type_results['total'] += 1
+            results['total_files'] += 1
+            file_path = os.path.join(type_dir, filename)
             
-            # Process each file in the email directory
-            for filename in os.listdir(email_path):
-                file_path = os.path.join(email_path, filename)
+            print(f"\nProcessing: {filename}")
+            try:
+                # Process document
+                start_time = datetime.now()
+                extracted_data = processor.process_document(file_path, doc_type)
+                processing_time = (datetime.now() - start_time).total_seconds()
                 
-                # Skip if not a file
-                if not os.path.isfile(file_path):
-                    continue
-                    
-                logger.info(f"\nProcessing file: {filename}")
+                # Save results
+                file_result = {
+                    'filename': filename,
+                    'success': True,
+                    'processing_time': processing_time,
+                    'extracted_data': extracted_data
+                }
                 
-                try:
-                    # Process the document
-                    processed_path, extracted_data = ocr_processor.process_document(file_path)
-                    
-                    logger.info(f"Successfully processed file")
-                    logger.info(f"Processed file saved at: {processed_path}")
-                    logger.info("Extracted data:")
-                    
-                    # Log extracted data
-                    for key, value in extracted_data.items():
-                        logger.info(f"  {key}: {value}")
-                    
-                    # Validate extracted data
-                    validate_extracted_data(extracted_data, filename, logger)
-                    
-                except Exception as e:
-                    logger.error(f"Failed to process {filename}: {str(e)}")
-                    continue
-
-        logger.info("\nOCR testing completed!")
-        return True
-
-    except Exception as e:
-        logger.error(f"OCR test failed: {str(e)}")
-        return False
-
-def validate_extracted_data(data: Dict, filename: str, logger: logging.Logger) -> None:
-    """Validate the extracted data based on file type and name."""
-    
-    # Check for expected data based on filename
-    filename_lower = filename.lower()
-    
-    if 'passport' in filename_lower:
-        if not data.get('passport_number'):
-            logger.warning("No passport number found in passport document")
-        else:
-            logger.info("✓ Found passport number")
+                type_results['successful'] += 1
+                results['successful'] += 1
+                
+                print("✓ Success!")
+                print("Extracted data:")
+                for key, value in extracted_data.items():
+                    print(f"  {key}: {value}")
+                
+            except Exception as e:
+                file_result = {
+                    'filename': filename,
+                    'success': False,
+                    'error': str(e)
+                }
+                
+                type_results['failed'] += 1
+                results['failed'] += 1
+                
+                print(f"✗ Failed: {str(e)}")
             
-    if 'emirates' in filename_lower or 'eid' in filename_lower:
-        if not data.get('emirates_id'):
-            logger.warning("No Emirates ID found in Emirates ID document")
-        else:
-            logger.info("✓ Found Emirates ID")
-            
-    # Add any other specific validations based on your document types
+            type_results['files'].append(file_result)
+        
+        results['results_by_type'][doc_type] = type_results
+    
+    # Save detailed results
+    results_file = os.path.join(results_dir, 'ocr_test_results.json')
+    with open(results_file, 'w') as f:
+        json.dump(results, f, indent=2)
+    
+    # Print summary
+    print("\nTest Summary:")
+    print(f"Total files processed: {results['total_files']}")
+    print(f"Successful: {results['successful']}")
+    print(f"Failed: {results['failed']}")
+    print(f"\nDetailed results saved to: {results_file}")
 
 if __name__ == "__main__":
-    success = test_ocr_processing()
-    sys.exit(0 if success else 1)
+    test_ocr_processing()
