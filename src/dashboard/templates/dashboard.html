@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Process Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-100">
+    <div id="app" class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">Process Dashboard</h1>
+            <p class="text-gray-600">Real-time process monitoring and control</p>
+        </div>
+
+        <!-- Stats Overview -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+            <div class="bg-white p-4 rounded-lg shadow">
+                <h3 class="text-lg font-semibold text-gray-700">Active Processes</h3>
+                <p class="text-2xl font-bold text-blue-600">{{ stats.active_processes }}</p>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow">
+                <h3 class="text-lg font-semibold text-gray-700">Success Rate</h3>
+                <p class="text-2xl font-bold text-green-600">{{ stats.success_rate }}%</p>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow">
+                <h3 class="text-lg font-semibold text-gray-700">Errors Today</h3>
+                <p class="text-2xl font-bold text-red-600">{{ stats.errors_today }}</p>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow">
+                <h3 class="text-lg font-semibold text-gray-700">Avg Process Time</h3>
+                <p class="text-2xl font-bold text-purple-600">{{ stats.avg_process_time }}s</p>
+            </div>
+        </div>
+
+        <!-- Active Processes -->
+        <div class="bg-white rounded-lg shadow mb-8">
+            <div class="p-4 border-b">
+                <h2 class="text-xl font-bold text-gray-800">Active Processes</h2>
+            </div>
+            <div class="p-4">
+                <table class="min-w-full">
+                    <thead>
+                        <tr>
+                            <th class="text-left">Process ID</th>
+                            <th class="text-left">Stage</th>
+                            <th class="text-left">Status</th>
+                            <th class="text-left">Started</th>
+                            <th class="text-left">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="process in processes" :key="process.id" 
+                            class="border-t">
+                            <td class="py-2">{{ process.id }}</td>
+                            <td>{{ process.stage }}</td>
+                            <td>
+                                <span :class="getStatusClass(process.status)">
+                                    {{ process.status }}
+                                </span>
+                            </td>
+                            <td>{{ formatDate(process.started_at) }}</td>
+                            <td>
+                                <button @click="controlProcess(process.id, 'pause')"
+                                        v-if="process.status === 'running'"
+                                        class="bg-yellow-500 text-white px-3 py-1 rounded">
+                                    Pause
+                                </button>
+                                <button @click="controlProcess(process.id, 'resume')"
+                                        v-if="process.status === 'paused'"
+                                        class="bg-green-500 text-white px-3 py-1 rounded">
+                                    Resume
+                                </button>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Error Log -->
+        <div class="bg-white rounded-lg shadow">
+            <div class="p-4 border-b">
+                <h2 class="text-xl font-bold text-gray-800">Error Log</h2>
+            </div>
+            <div class="p-4">
+                <div v-for="error in errors" :key="error.timestamp" 
+                     class="border-b last:border-b-0 py-2">
+                    <p class="text-red-600 font-medium">{{ error.error_message }}</p>
+                    <p class="text-sm text-gray-600">
+                        Process: {{ error.process_id }} | 
+                        Time: {{ formatDate(error.timestamp) }}
+                    </p>
+                    <p class="text-sm text-gray-500">{{ error.details }}</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp } = Vue
+
+        createApp({
+            data() {
+                return {
+                    stats: {
+                        active_processes: 0,
+                        success_rate: 0,
+                        errors_today: 0,
+                        avg_process_time: 0
+                    },
+                    processes: [],
+                    errors: []
+                }
+            },
+            methods: {
+                async fetchData() {
+                    // Fetch stats
+                    const statsResponse = await fetch('/api/stats')
+                    const statsData = await statsResponse.json()
+                    this.stats = statsData
+
+                    // Fetch processes
+                    const processesResponse = await fetch('/api/processes')
+                    const processesData = await processesResponse.json()
+                    this.processes = processesData
+
+                    // Fetch errors
+                    const errorsResponse = await fetch('/api/errors')
+                    const errorsData = await errorsResponse.json()
+                    this.errors = errorsData.recent_errors
+                },
+                async controlProcess(processId, action) {
+                    await fetch(`/api/process/${processId}/control`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ action })
+                    })
+                    await this.fetchData()
+                },
+                formatDate(dateString) {
+                    return new Date(dateString).toLocaleString()
+                },
+                getStatusClass(status) {
+                    return {
+                        'running': 'text-green-600',
+                        'paused': 'text-yellow-600',
+                        'failed': 'text-red-600',
+                        'completed': 'text-blue-600'
+                    }[status] || 'text-gray-600'
+                }
+            },
+            mounted() {
+                this.fetchData()
+                // Refresh data every 30 seconds
+                setInterval(this.fetchData, 30000)
+            }
+        }).mount('#app')
+    </script>
+</body>
+</html>

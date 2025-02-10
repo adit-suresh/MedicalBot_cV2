@@ -9,8 +9,14 @@ logger = logging.getLogger(__name__)
 
 class SlackNotifier:
     def __init__(self):
-        self.client = WebClient(token=os.getenv('SLACK_BOT_TOKEN'))
+        self.token = os.getenv('SLACK_BOT_TOKEN')
         self.default_channel = os.getenv('SLACK_DEFAULT_CHANNEL', '#process-notifications')
+        self.enabled = bool(self.token)
+        
+        if not self.enabled:
+            logger.warning("Slack notifications disabled: No SLACK_BOT_TOKEN found in environment variables")
+        else:
+            self.client = WebClient(token=self.token)
 
     def send_notification(self, 
                          message: str, 
@@ -18,72 +24,17 @@ class SlackNotifier:
                          severity: str = "info",
                          process_id: Optional[str] = None,
                          additional_info: Optional[Dict] = None) -> bool:
-        """
-        Send notification to Slack.
-        
-        Args:
-            message: Main message text
-            channel: Override default channel
-            severity: info/warning/error
-            process_id: Related process ID
-            additional_info: Any additional data to include
-        """
+        """Send notification to Slack."""
+        if not self.enabled:
+            logger.info(f"Would send Slack notification: {message}")
+            return False
+
         try:
-            # Color coding based on severity
-            colors = {
-                "info": "#36a64f",      # Green
-                "warning": "#ffa500",   # Orange
-                "error": "#ff0000",     # Red
-                "success": "#2eb886"    # Emerald
-            }
-
-            # Build the message blocks
-            blocks = []
-            
-            # Header with timestamp and process ID
-            header_text = f"*{severity.upper()}* | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            if process_id:
-                header_text += f" | Process ID: {process_id}"
-            
-            blocks.append({
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": header_text
-                }
-            })
-
-            # Main message
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": message
-                }
-            })
-
-            # Additional info if provided
-            if additional_info:
-                info_text = "\n".join([f"*{k}:* {v}" for k, v in additional_info.items()])
-                blocks.append({
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"Additional Information:\n{info_text}"
-                    }
-                })
-
-            # Send the message
-            self.client.chat_postMessage(
+            response = self.client.chat_postMessage(
                 channel=channel or self.default_channel,
-                blocks=blocks,
-                text=message,  # Fallback text
-                attachments=[{
-                    "color": colors.get(severity, colors["info"])
-                }]
+                text=message
             )
-            return True
-
+            logger.info(f"Slack notification sent: {response['ts']}")
         except SlackApiError as e:
             logger.error(f"Failed to send Slack notification: {str(e)}")
             return False
@@ -94,6 +45,13 @@ class SlackNotifier:
                           status: str,
                           details: Optional[Dict] = None) -> None:
         """Send process stage update notification."""
+        if not self.enabled:
+            logger.info(
+                f"Would send process update: Process {process_id} - "
+                f"Stage: {stage}, Status: {status}"
+            )
+            return
+
         message = f"*Process Stage Update*\nStage: {stage}\nStatus: {status}"
         severity = "error" if "fail" in status.lower() else "info"
         
@@ -110,6 +68,13 @@ class SlackNotifier:
                         error_details: Optional[Dict] = None,
                         requires_attention: bool = False) -> None:
         """Send error alert notification."""
+        if not self.enabled:
+            logger.info(
+                f"Would send error alert: Process {process_id} - "
+                f"Error: {error_message}"
+            )
+            return
+
         message = f"*Error Alert*\n{error_message}"
         if requires_attention:
             message += "\n<!here> *Manual intervention required*"
@@ -126,6 +91,13 @@ class SlackNotifier:
                                   success: bool,
                                   summary: Dict) -> None:
         """Send process completion notification."""
+        if not self.enabled:
+            logger.info(
+                f"Would send completion notification: Process {process_id} - "
+                f"Success: {success}"
+            )
+            return
+
         status = "Success" if success else "Failed"
         message = f"*Process Completed*\nFinal Status: {status}"
         
