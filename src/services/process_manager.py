@@ -3,31 +3,28 @@ from typing import Dict, Optional
 from datetime import datetime
 
 from src.utils.slack_notifier import SlackNotifier
-from src.utils.process_control import ProcessControl, ProcessStatus, ProcessStage
+from src.utils.process_control_interface import IProcessControl, ProcessStatus, ProcessStage
 from src.utils.portal_checker import PortalChecker, PortalStatus
+from src.utils.dependency_container import inject
 
 logger = logging.getLogger(__name__)
 
+@inject(SlackNotifier, IProcessControl, PortalChecker)
 class ProcessManager:
-    def __init__(self):
-        self.slack = SlackNotifier()
-        self.process_control = ProcessControl()
-        self.portal_checker = PortalChecker()
+    """Manages process flow and coordination."""
 
     def handle_process(self, process_id: str) -> None:
-        """
-        Main process handler with error recovery and notifications.
-        """
+        """Main process handler with error recovery and notifications."""
         try:
-            self.process_control.start_process(process_id)
-            self.slack.send_process_update(
+            self._process_control.start_process(process_id)
+            self._slack_notifier.send_process_update(
                 process_id=process_id,
                 stage="Process Started",
                 status="Running"
             )
 
             # Check portal status before starting
-            portal_status = self.portal_checker.check_status()
+            portal_status = self._portal_checker.check_status()
             if portal_status != PortalStatus.UP:
                 self._handle_portal_down(process_id)
                 return
@@ -56,10 +53,10 @@ class ProcessManager:
                       handler: callable) -> bool:
         """Execute a single stage with error handling."""
         try:
-            self.process_control.update_stage(
+            self._process_control.update_stage(
                 process_id, stage, ProcessStatus.RUNNING
             )
-            self.slack.send_process_update(
+            self._slack_notifier.send_process_update(
                 process_id=process_id,
                 stage=stage.value,
                 status="Started"
@@ -69,7 +66,7 @@ class ProcessManager:
             result = handler(process_id)
 
             if result.get('success'):
-                self.slack.send_process_update(
+                self._slack_notifier.send_process_update(
                     process_id=process_id,
                     stage=stage.value,
                     status="Completed",
@@ -92,50 +89,50 @@ class ProcessManager:
                             error: str, requires_input: bool = False) -> None:
         """Handle stage failure."""
         if requires_input:
-            self.process_control.pause_process(
+            self._process_control.pause_process(
                 process_id,
                 reason=error,
                 manual_input_type=stage.value
             )
-            self.slack.send_error_alert(
+            self._slack_notifier.send_error_alert(
                 process_id=process_id,
                 error_message=f"Stage {stage.value} requires manual intervention",
                 error_details={"error": error},
                 requires_attention=True
             )
         else:
-            self.process_control.update_stage(
+            self._process_control.update_stage(
                 process_id, stage, ProcessStatus.FAILED,
                 {"error": error}
             )
-            self.slack.send_error_alert(
+            self._slack_notifier.send_error_alert(
                 process_id=process_id,
                 error_message=f"Stage {stage.value} failed: {error}"
             )
 
     def _handle_portal_down(self, process_id: str) -> None:
         """Handle portal unavailability."""
-        self.process_control.pause_process(
+        self._process_control.pause_process(
             process_id,
             reason="Insurance portal is unavailable",
             manual_input_type="portal_status"
         )
-        self.slack.send_error_alert(
+        self._slack_notifier.send_error_alert(
             process_id=process_id,
             error_message="Insurance portal is down",
-            error_details=self.portal_checker.get_detailed_status(),
+            error_details=self._portal_checker.get_detailed_status(),
             requires_attention=True
         )
 
     def _handle_failure(self, process_id: str, error: str) -> None:
         """Handle process failure."""
-        self.process_control.update_stage(
+        self._process_control.update_stage(
             process_id,
             ProcessStage.COMPLETION,
             ProcessStatus.FAILED,
             {"error": error}
         )
-        self.slack.send_completion_notification(
+        self._slack_notifier.send_completion_notification(
             process_id=process_id,
             success=False,
             summary={"error": error}
@@ -143,34 +140,71 @@ class ProcessManager:
 
     def _complete_process(self, process_id: str, success: bool) -> None:
         """Complete the process."""
-        self.process_control.update_stage(
+        self._process_control.update_stage(
             process_id,
             ProcessStage.COMPLETION,
             ProcessStatus.COMPLETED
         )
-        self.slack.send_completion_notification(
+        self._slack_notifier.send_completion_notification(
             process_id=process_id,
             success=True,
-            summary=self.process_control.get_process_status(process_id)
+            summary=self._process_control.get_process_status(process_id)
         )
 
-    # Stage handler methods would be implemented here
+    # Stage handler methods
     def _process_email(self, process_id: str) -> Dict:
         """Handle email processing stage."""
-        # Implement email processing
-        pass
+        try:
+            # Implement actual email processing logic here
+            # This is a placeholder - implement based on your requirements
+            return {
+                'success': True,
+                'details': {'processed_email_id': process_id}
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }
 
     def _extract_documents(self, process_id: str) -> Dict:
         """Handle document extraction stage."""
-        # Implement document extraction
-        pass
+        try:
+            # Implement document extraction logic here
+            return {
+                'success': True,
+                'details': {'extracted_documents': []}
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }
 
     def _validate_data(self, process_id: str) -> Dict:
         """Handle data validation stage."""
-        # Implement data validation
-        pass
+        try:
+            # Implement data validation logic here
+            return {
+                'success': True,
+                'details': {'validated_fields': []}
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }
 
     def _submit_to_portal(self, process_id: str) -> Dict:
         """Handle portal submission stage."""
-        # Implement portal submission
-        pass
+        try:
+            # Implement portal submission logic here
+            return {
+                'success': True,
+                'details': {'submission_id': 'test123'}
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }

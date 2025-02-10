@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from typing import Dict
 
-from src.document_processor.vision_processor import VisionProcessor
+from src.document_processor.textract_processor import VisionProcessor
 from src.utils.logger import setup_logger
 
 def test_vision_extraction(test_files_dir: str) -> None:

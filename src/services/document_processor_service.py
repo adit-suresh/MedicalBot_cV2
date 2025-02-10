@@ -7,14 +7,13 @@ from src.document_processor.ocr_processor import OCRProcessor
 from src.document_processor.data_extractor import DataExtractor
 from src.database.db_manager import DatabaseManager
 from src.utils.exceptions import OCRError
+from src.utils.dependency_container import inject
 
 logger = logging.getLogger(__name__)
 
+@inject(OCRProcessor, DataExtractor, DatabaseManager)
 class DocumentProcessorService:
-    def __init__(self):
-        self.ocr_processor = OCRProcessor()
-        self.data_extractor = DataExtractor()
-        self.db_manager = DatabaseManager()
+    """Service for processing and managing documents."""
 
     def process_new_documents(self, email_id: str, documents: List[Dict[str, str]]) -> Tuple[bool, str]:
         """
@@ -45,11 +44,11 @@ class DocumentProcessorService:
                 return False, "Failed to extract passport data"
 
             # Check for existing client
-            if self.db_manager.client_exists(client_data['passport_number']):
+            if self._db_manager.client_exists(client_data['passport_number']):
                 return False, f"Client with passport {client_data['passport_number']} already exists"
 
             # Add client to database
-            client_id = self.db_manager.add_client(client_data)
+            client_id = self._db_manager.add_client(client_data)
             logger.info(f"Added new client with ID: {client_id}")
 
             # Process remaining documents
@@ -66,10 +65,10 @@ class DocumentProcessorService:
                 "insurance_company": "Default Insurance Co",  # This should come from configuration
                 "reference_email_id": email_id
             }
-            submission_id = self.db_manager.add_submission(client_id, submission_data)
+            submission_id = self._db_manager.add_submission(client_id, submission_data)
 
             # Check for missing documents
-            missing_docs = self.db_manager.get_missing_documents(client_id)
+            missing_docs = self._db_manager.get_missing_documents(client_id)
             
             if missing_docs:
                 return True, f"Processed successfully but missing documents: {', '.join(missing_docs)}"
@@ -83,10 +82,10 @@ class DocumentProcessorService:
         """Process passport and extract client data."""
         try:
             # Process document through OCR
-            processed_path, extracted_text = self.ocr_processor.process_document(file_path)
+            processed_path, extracted_text = self._ocr_processor.process_document(file_path)
             
             # Extract data from OCR text
-            passport_data = self.data_extractor.extract_passport_data(extracted_text)
+            passport_data = self._data_extractor.extract_passport_data(extracted_text)
             
             if not passport_data.get('passport_number'):
                 logger.error("No passport number found in passport")
@@ -109,13 +108,13 @@ class DocumentProcessorService:
             
             # Process through OCR if needed
             if doc_type in ['emirates_id', 'visa']:
-                processed_path, extracted_text = self.ocr_processor.process_document(file_path)
+                processed_path, extracted_text = self._ocr_processor.process_document(file_path)
                 
                 # Extract specific data based on document type
                 if doc_type == 'emirates_id':
-                    data = self.data_extractor.extract_emirates_id_data(extracted_text)
+                    data = self._data_extractor.extract_emirates_id_data(extracted_text)
                 elif doc_type == 'visa':
-                    data = self.data_extractor.extract_visa_data(extracted_text)
+                    data = self._data_extractor.extract_visa_data(extracted_text)
                 
                 # Record document in database
                 doc_data = {
@@ -125,7 +124,7 @@ class DocumentProcessorService:
                     "status": "valid" if data else "invalid"
                 }
                 
-                self.db_manager.add_document(client_id, doc_data)
+                self._db_manager.add_document(client_id, doc_data)
                 return True
 
             # Handle Excel sheet
@@ -136,7 +135,7 @@ class DocumentProcessorService:
                     "processed_path": file_path,  # No OCR needed for Excel
                     "status": "valid"
                 }
-                self.db_manager.add_document(client_id, doc_data)
+                self._db_manager.add_document(client_id, doc_data)
                 return True
 
             return False
