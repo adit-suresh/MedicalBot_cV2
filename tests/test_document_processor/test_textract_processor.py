@@ -1,112 +1,203 @@
-import unittest
-import os
+import pytest
 from unittest.mock import Mock, patch
+import os
 import boto3
 from botocore.exceptions import ClientError
+import sys
 
-from src.document_processor.textract_processor import VisionProcessor
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
-class TestTextractProcessor(unittest.TestCase):
-    def setUp(self):
-        """Set up test environment."""
-        self.test_files_dir = os.path.join(os.path.dirname(__file__), 'test_files')
-        os.makedirs(self.test_files_dir, exist_ok=True)
-        
-        # Initialize the processor
-        self.processor = VisionProcessor()
-        
-        # Test file paths
-        self.test_files = {
-            'emirates_id': os.path.join(self.test_files_dir, 'test_emirates_id.jpg'),
-            'passport': os.path.join(self.test_files_dir, 'test_passport.jpg'),
-            'visa': os.path.join(self.test_files_dir, 'test_visa.jpg'),
-            'work_permit': os.path.join(self.test_files_dir, 'test_work_permit.jpg')
-        }
+from src.document_processor.textract_processor import TextractProcessor
+from src.utils.error_handling import ServiceError
 
-    @patch('boto3.client')
-    def test_work_permit_extraction(self, mock_boto):
-        """Test extraction from work permit."""
-        # Mock Textract response
-        mock_textract = Mock()
-        mock_boto.return_value = mock_textract
-        mock_textract.analyze_document.return_value = {
-            'Blocks': [
-                {
-                    'BlockType': 'LINE',
-                    'Text': 'WORK PERMIT',
-                    'Confidence': 99.0
-                },
-                {
-                    'BlockType': 'LINE',
-                    'Text': 'Name: John Smith',
-                    'Confidence': 98.0
-                },
-                {
-                    'BlockType': 'LINE',
-                    'Text': 'Permit No: 12345',
-                    'Confidence': 97.0
-                }
-            ]
-        }
+@pytest.fixture
+def mock_textract_response():
+    """Mock successful Textract response."""
+    return {
+        'Blocks': [
+            {
+                'BlockType': 'LINE',
+                'Text': 'REPUBLIC OF TEST',
+                'Confidence': 99.0
+            },
+            {
+                'BlockType': 'LINE',
+                'Text': 'Passport No: A1234567',
+                'Confidence': 98.0
+            },
+            {
+                'BlockType': 'LINE',
+                'Text': 'Surname: SMITH',
+                'Confidence': 97.0
+            },
+            {
+                'BlockType': 'LINE',
+                'Text': 'Given Names: JOHN JAMES',
+                'Confidence': 96.0
+            }
+        ]
+    }
 
-        # Process work permit
-        result = self.processor.process_document(self.test_files['work_permit'])
-        
-        # Verify required fields
-        self.assertIn('full_name', result)
-        self.assertIn('personal_no', result)
-        
-        # Verify data format
-        self.assertTrue(len(result['personal_no']) > 0)
-        self.assertTrue(len(result['full_name']) > 0)
+@pytest.fixture
+def mock_emirates_id_response():
+    """Mock Emirates ID Textract response."""
+    return {
+        'Blocks': [
+            {
+                'BlockType': 'LINE',
+                'Text': 'UNITED ARAB EMIRATES',
+                'Confidence': 99.0
+            },
+            {
+                'BlockType': 'LINE',
+                'Text': 'ID Number: 784-1234-1234567-1',
+                'Confidence': 98.0
+            },
+            {
+                'BlockType': 'LINE',
+                'Text': 'Name: MOHAMMAD AHMAD',
+                'Confidence': 97.0
+            },
+            {
+                'BlockType': 'LINE',
+                'Text': 'Nationality: UAE',
+                'Confidence': 96.0
+            }
+        ]
+    }
 
-    @patch('boto3.client')
-    def test_emirates_id_extraction(self, mock_boto):
-        """Test extraction from Emirates ID."""
-        # Mock Textract response
-        mock_textract = Mock()
-        mock_boto.return_value = mock_textract
-        mock_textract.analyze_document.return_value = {
-            'Blocks': [
-                {
-                    'BlockType': 'LINE',
-                    'Text': 'ID Number: 784-1234-1234567-1',
-                    'Confidence': 99.0
-                },
-                {
-                    'BlockType': 'LINE',
-                    'Text': 'Name: John Smith',
-                    'Confidence': 98.0
-                }
-            ]
-        }
+@pytest.fixture
+def processor():
+    """Create Textract processor instance."""
+    return TextractProcessor()
 
-        result = self.processor.process_document(self.test_files['emirates_id'])
-        
-        # Verify Emirates ID specific fields
-        self.assertIn('emirates_id', result)
-        self.assertIn('name_en', result)
+def test_process_passport(processor, mock_textract_response):
+    """Test passport processing."""
+    with patch('boto3.client') as mock_boto:
+        # Configure mock
+        mock_client = Mock()
+        mock_boto.return_value = mock_client
+        mock_client.analyze_document.return_value = mock_textract_response
 
-    @patch('boto3.client')
-    def test_error_handling(self, mock_boto):
-        """Test error handling."""
-        # Mock Textract error
-        mock_textract = Mock()
-        mock_boto.return_value = mock_textract
-        mock_textract.analyze_document.side_effect = ClientError(
-            {'Error': {'Code': 'InvalidRequest', 'Message': 'Invalid image'}},
+        # Create test file
+        with open('test_passport.pdf', 'wb') as f:
+            f.write(b'test content')
+
+        try:
+            # Process document
+            result = processor.process_document('test_passport.pdf', 'passport')
+
+            # Verify extracted data
+            assert result['passport_number'] == 'A1234567'
+            assert result['surname'] == 'SMITH'
+            assert result['given_names'] == 'JOHN JAMES'
+
+            # Verify Textract was called correctly
+            mock_client.analyze_document.assert_called_once()
+            
+        finally:
+            # Cleanup
+            if os.path.exists('test_passport.pdf'):
+                os.remove('test_passport.pdf')
+
+def test_process_emirates_id(processor, mock_emirates_id_response):
+    """Test Emirates ID processing."""
+    with patch('boto3.client') as mock_boto:
+        mock_client = Mock()
+        mock_boto.return_value = mock_client
+        mock_client.analyze_document.return_value = mock_emirates_id_response
+
+        with open('test_eid.pdf', 'wb') as f:
+            f.write(b'test content')
+
+        try:
+            result = processor.process_document('test_eid.pdf', 'emirates_id')
+
+            assert result['emirates_id'] == '784-1234-1234567-1'
+            assert result['name_en'] == 'MOHAMMAD AHMAD'
+            assert result['nationality'] == 'UAE'
+            
+        finally:
+            if os.path.exists('test_eid.pdf'):
+                os.remove('test_eid.pdf')
+
+def test_textract_error(processor):
+    """Test handling of Textract errors."""
+    with patch('boto3.client') as mock_boto:
+        mock_client = Mock()
+        mock_boto.return_value = mock_client
+        mock_client.analyze_document.side_effect = ClientError(
+            {'Error': {'Code': 'InvalidRequest', 'Message': 'Test error'}},
             'AnalyzeDocument'
         )
-        
-        with self.assertRaises(Exception):
-            self.processor.process_document(self.test_files['passport'])
 
-    def test_invalid_file(self):
-        """Test handling of invalid file."""
-        invalid_file = os.path.join(self.test_files_dir, 'nonexistent.jpg')
+        with pytest.raises(ServiceError) as exc_info:
+            processor.process_document('test.pdf', 'passport')
         
-        with self.assertRaises(FileNotFoundError):
-            self.processor.process_document(invalid_file)
+        assert 'Textract processing failed' in str(exc_info.value)
 
-if __name__ == '__main__':
-    unittest.main()
+def test_document_type_detection(processor, mock_textract_response):
+    """Test automatic document type detection."""
+    with patch('boto3.client') as mock_boto:
+        mock_client = Mock()
+        mock_boto.return_value = mock_client
+        mock_client.analyze_document.return_value = mock_textract_response
+
+        with open('test_doc.pdf', 'wb') as f:
+            f.write(b'test content')
+
+        try:
+            result = processor.process_document('test_doc.pdf')  # No doc_type specified
+            assert 'passport_number' in result  # Should detect it's a passport
+            
+        finally:
+            if os.path.exists('test_doc.pdf'):
+                os.remove('test_doc.pdf')
+
+def test_missing_required_fields(processor):
+    """Test validation of missing required fields."""
+    with patch('boto3.client') as mock_boto:
+        mock_client = Mock()
+        mock_boto.return_value = mock_client
+        mock_client.analyze_document.return_value = {
+            'Blocks': [
+                {
+                    'BlockType': 'LINE',
+                    'Text': 'PASSPORT',
+                    'Confidence': 99.0
+                }
+                # Missing required fields
+            ]
+        }
+
+        with open('test_passport.pdf', 'wb') as f:
+            f.write(b'test content')
+
+        try:
+            result = processor.process_document('test_passport.pdf', 'passport')
+            assert not result.get('passport_number')  # Should be missing
+            
+        finally:
+            if os.path.exists('test_passport.pdf'):
+                os.remove('test_passport.pdf')
+
+@pytest.mark.integration
+def test_real_document_processing(processor):
+    """Integration test with real AWS Textract."""
+    # Skip if no AWS credentials
+    if not os.getenv('AWS_ACCESS_KEY_ID'):
+        pytest.skip("AWS credentials not configured")
+
+    # Test file should be in test_files directory
+    test_file = os.path.join(
+        os.path.dirname(__file__),
+        'test_files',
+        'sample_passport.pdf'
+    )
+
+    if not os.path.exists(test_file):
+        pytest.skip("Test file not found")
+
+    result = processor.process_document(test_file, 'passport')
+    assert result  # Should return some data
+    assert 'passport_number' in result

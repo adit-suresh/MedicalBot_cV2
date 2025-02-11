@@ -64,3 +64,7 @@ coverage.xml
 
 # Jupyter Notebook
 .ipynb_checkpoints
+
+test_files/
+test_output/
+template.xlsx
