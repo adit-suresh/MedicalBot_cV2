@@ -78,7 +78,7 @@ class ExcelProcessor:
             logger.error(f"Error validating Excel template: {str(e)}")
             raise ServiceError(f"Excel template validation failed: {str(e)}")
         
-    def process_excel(self, file_path: str) -> Tuple[pd.DataFrame, List[Dict]]:
+    def process_excel(self, file_path: str, dayfirst: bool = True) -> Tuple[pd.DataFrame, List[Dict]]:
         """
         Process Excel file and validate data.
         
@@ -89,12 +89,9 @@ class ExcelProcessor:
             Tuple of (processed dataframe, list of validation errors)
         """
         try:
-            # Read both Excel formats
-            if file_path.endswith('.xlsx'):
-                df = pd.read_excel(file_path, engine='openpyxl')
-            else:
-                df = pd.read_excel(file_path)
-
+            
+            df = pd.read_excel(file_path)
+            
             # Clean column names
             df.columns = [self._clean_column_name(col) for col in df.columns]
 
@@ -107,7 +104,7 @@ class ExcelProcessor:
             errors = self._validate_data(df)
 
             # Clean and standardize data
-            df = self._clean_data(df)
+            df = self._clean_data(df, dayfirst=dayfirst)
 
             return df, errors
 
@@ -159,14 +156,14 @@ class ExcelProcessor:
 
         return errors
 
-    def _clean_data(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _clean_data(self, df: pd.DataFrame, dayfirst: bool = True) -> pd.DataFrame:
         """Clean and standardize data."""
         # Handle dates
         date_fields = [field for field, val_type in self.required_fields.items() 
                       if val_type == 'date' and field in df.columns]
         for field in date_fields:
             try:
-                df[field] = pd.to_datetime(df[field]).dt.strftime('%Y-%m-%d')
+                df[field] = pd.to_datetime(df[field], dayfirst=dayfirst).dt.strftime('%Y-%m-%d')
             except:
                 df[field] = self.DEFAULT_VALUE
 

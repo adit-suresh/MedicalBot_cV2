@@ -1,11 +1,11 @@
+import os
 import logging
 from typing import Dict, Optional
-import os
 from datetime import datetime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
 import msal
+import requests
+import base64
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -17,54 +17,120 @@ class EmailValidator:
         self.client_id = os.getenv('CLIENT_ID')
         self.client_secret = os.getenv('CLIENT_SECRET')
         self.tenant_id = os.getenv('TENANT_ID')
-        self.validator_email = os.getenv('VALIDATOR_EMAIL')  # Email of the employee who validates
+        self.validator_email = os.getenv('VALIDATOR_EMAIL')
+        self.sender_email = os.getenv('USER_EMAIL')
         self.scope = ['https://graph.microsoft.com/.default']
         self.access_token = None
+        self.graph_endpoint = "https://graph.microsoft.com/v1.0"
 
         # Reference IDs to track validation requests
         self.pending_validations = {}
+
+        # Get initial token
+        self._authenticate()
+
+    def _authenticate(self) -> None:
+        """Authenticate with Microsoft Graph API using application permissions."""
+        try:
+            # Use client credentials flow for application permissions
+            app = msal.ConfidentialClientApplication(
+                client_id=self.client_id,
+                client_credential=self.client_secret,
+                authority=f"https://login.microsoftonline.com/{self.tenant_id}"
+            )
+            
+            result = app.acquire_token_for_client(scopes=self.scope)
+            
+            if "access_token" in result:
+                self.access_token = result["access_token"]
+                logger.info("Successfully acquired access token")
+            else:
+                raise Exception(f"Failed to acquire token: {result.get('error_description')}")
+
+        except Exception as e:
+            logger.error(f"Authentication failed: {str(e)}")
+            raise
 
     def send_for_validation(self, 
                           excel_path: str, 
                           process_id: str,
                           metadata: Optional[Dict] = None) -> Dict:
-        """
-        Send Excel file to validator for review.
-        
-        Args:
-            excel_path: Path to Excel file
-            process_id: Process identifier
-            metadata: Additional process information
-            
-        Returns:
-            Dict containing email status and tracking info
-        """
+        """Send Excel file to validator for review."""
         try:
             # Ensure we have a token
             if not self.access_token:
                 self._authenticate()
 
-            # Create email
-            msg = MIMEMultipart()
-            msg['Subject'] = f'Data Validation Required - Process {process_id}'
-            msg['To'] = self.validator_email
-
-            # Create email body
-            body = self._create_email_body(process_id, metadata)
-            msg.attach(MIMEText(body, 'html'))
-
-            # Attach Excel file
+            # Read Excel file
             with open(excel_path, 'rb') as f:
-                excel_attachment = MIMEApplication(f.read(), _subtype='xlsx')
-                excel_attachment.add_header(
-                    'Content-Disposition', 
-                    'attachment', 
-                    filename=os.path.basename(excel_path)
-                )
-                msg.attach(excel_attachment)
+                excel_content = f.read()
+
+            # Prepare email data
+            email_data = {
+                'message': {
+                    'subject': f'Data Validation Required - Process {process_id}',
+                    'body': {
+                        'contentType': 'HTML',
+                        'content': self._create_email_body(process_id, metadata)
+                    },
+                    'toRecipients': [
+                        {
+                            'emailAddress': {
+                                'address': self.validator_email
+                            }
+                        }
+                    ],
+                    'attachments': [
+                        {
+                            '@odata.type': '#microsoft.graph.fileAttachment',
+                            'name': os.path.basename(excel_path),
+                            'contentBytes': base64.b64encode(excel_content).decode(),
+                            'contentType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                        }
+                    ]
+                }
+            }
 
             # Send email using Microsoft Graph API
-            self._send_email(msg)
+            headers = {
+                'Authorization': f'Bearer {self.access_token}',
+                'Content-Type': 'application/json',
+            }
+
+            # Use the correct endpoint for application permissions
+            endpoints = [
+                f"{self.graph_endpoint}/users/{quote(self.sender_email)}/sendMail",
+                f"{self.graph_endpoint}/groups/{os.getenv('GROUP_ID', '')}/sendMail",
+                f"{self.graph_endpoint}/users/{quote(self.sender_email)}/messages"
+            ]
+            
+            success = False
+            last_error = None
+            
+            for endpoint in endpoints:
+                try:
+                    if endpoint.endswith('/messages'):
+                        # Create draft and send
+                         response = requests.post(endpoint, headers=headers, json={'message': email_data['message']})
+                         if response.status_code == 201:
+                             message_id = response.json()['id']
+                             send_endpoint = f"{endpoint}/{message_id}/send"
+                             response = requests.post(send_endpoint, headers=headers)
+                             success = response.status_code in [200, 202]
+                    else:
+                        response = requests.post(endpoint, headers=headers, json=email_data)
+                        success = response.status_code in [200, 202]
+
+                    if success:
+                        break
+                except Exception as e:
+                    last_error = e
+                    continue
+                
+            if not success:
+                error_msg = f"All send attempts failed. Last error: {last_error if last_error else 'Unknown error'}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
 
             # Store validation request
             validation_id = f"VAL_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -76,77 +142,20 @@ class EmailValidator:
                 'metadata': metadata
             }
 
+            logger.info(f"Successfully sent validation email to {self.validator_email}")
             return {
                 'status': 'sent',
                 'validation_id': validation_id,
                 'sent_to': self.validator_email
             }
-
+            
+            
         except Exception as e:
             logger.error(f"Failed to send validation email: {str(e)}")
             return {
                 'status': 'error',
                 'error': str(e)
             }
-
-    def _authenticate(self) -> None:
-        """Authenticate with Microsoft Graph API."""
-        try:
-            app = msal.ConfidentialClientApplication(
-                client_id=self.client_id,
-                client_credential=self.client_secret,
-                authority=f"https://login.microsoftonline.com/{self.tenant_id}"
-            )
-            
-            result = app.acquire_token_for_client(scopes=self.scope)
-            
-            if "access_token" in result:
-                self.access_token = result["access_token"]
-            else:
-                raise Exception("Failed to acquire token")
-
-        except Exception as e:
-            logger.error(f"Authentication failed: {str(e)}")
-            raise
-
-    def _send_email(self, msg: MIMEMultipart) -> None:
-        """Send email using Microsoft Graph API."""
-        import requests
-        
-        endpoint = "https://graph.microsoft.com/v1.0/users/@/sendMail"
-        
-        headers = {
-            'Authorization': f'Bearer {self.access_token}',
-            'Content-Type': 'application/json'
-        }
-        
-        email_data = {
-            'message': {
-                'subject': msg['Subject'],
-                'body': {
-                    'contentType': 'HTML',
-                    'content': msg.get_payload(0).get_payload()
-                },
-                'toRecipients': [
-                    {
-                        'emailAddress': {
-                            'address': msg['To']
-                        }
-                    }
-                ],
-                'attachments': [
-                    {
-                        '@odata.type': '#microsoft.graph.fileAttachment',
-                        'name': att.get_filename(),
-                        'contentBytes': att.get_payload()
-                    }
-                    for att in msg.get_payload()[1:]
-                ]
-            }
-        }
-        
-        response = requests.post(endpoint, headers=headers, json=email_data)
-        response.raise_for_status()
 
     def _create_email_body(self, process_id: str, metadata: Optional[Dict] = None) -> str:
         """Create HTML email body for validation request."""
@@ -194,17 +203,3 @@ class EmailValidator:
             }
             
         return self.pending_validations[validation_id]
-
-    def process_validation_response(self, email_data: Dict) -> Dict:
-        """
-        Process validation response email.
-        
-        Args:
-            email_data: Email data containing response
-            
-        Returns:
-            Dict containing validation result
-        """
-        # TODO: Implement email response processing
-        # This will be implemented when we have the email monitoring system ready
-        pass
