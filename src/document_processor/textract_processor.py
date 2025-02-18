@@ -85,144 +85,303 @@ class TextractProcessor:
         return data
 
     def _extract_passport_data(self, text_content: str) -> Dict[str, str]:
-        """Extract passport specific data."""
+        """Extract data from passport."""
         data = {
             'passport_number': self.DEFAULT_VALUE,
-            'first_name': self.DEFAULT_VALUE,
-            'middle_name': self.DEFAULT_VALUE,
-            'last_name': self.DEFAULT_VALUE,
+            'surname': self.DEFAULT_VALUE,
+            'given_names': self.DEFAULT_VALUE,
             'nationality': self.DEFAULT_VALUE,
             'date_of_birth': self.DEFAULT_VALUE,
-            'sex': self.DEFAULT_VALUE,
-            'passport_expiry': self.DEFAULT_VALUE
+            'place_of_birth': self.DEFAULT_VALUE,
+            'gender': self.DEFAULT_VALUE,
+            'date_of_issue': self.DEFAULT_VALUE,
+            'date_of_expiry': self.DEFAULT_VALUE
         }
         
-        # Passport Number (try multiple patterns)
-        passport_patterns = [
-            r'[Pp]ass(?:port|\.)\s*[Nn]o\.?:?\s*([A-Z0-9]+)(?:\s*\n|$)',
-            r'[Pp]asaporte[:/\s]*([A-Z0-9]+)(?:\s*\n|$)'
-        ]
-        for pattern in passport_patterns:
-            match = re.search(pattern, text_content)
-            if match:
-                data['passport_number'] = match.group(1).strip()
-                break
+        # Debug log
+        logger.debug("Raw passport text:")
+        logger.debug(text_content)
         
-        # Names
-        surname_match = re.search(r'[Ss]urname[:/\s]*([A-Z\s]+?)(?:/|\n|$)', text_content)
-        if surname_match:
-            data['last_name'] = surname_match.group(1).strip()
+        # Clean text content
+        text = text_content.upper()
+        text = re.sub(r'\s+', ' ', text)  # Normalize whitespace
         
-        given_names_match = re.search(r'[Gg]iven\s*[Nn]ames?[:/\s]*([A-Z\s]+?)(?:/|\n|$)', text_content)
-        if given_names_match:
-            given_names = given_names_match.group(1).strip().split()
-            if given_names:
-                data['first_name'] = given_names[0]
-                if len(given_names) > 1:
-                    data['middle_name'] = ' '.join(given_names[1:])
-        
-        # Additional fields
+        # Pattern maps with multiple variations for each field
         patterns = {
-            'nationality': r'[Nn]ationality[:/\s]*([A-Z]+)(?:/|\n|$)',
-            'date_of_birth': r'[Dd]ate\s+of\s+[Bb]irth[:/\s]*(\d{2}\s*[A-Z]{3}\s*\d{4})(?:/|\n|$)',
-            'sex': r'\b[Ss]ex[:/\s]*([MF])(?:/|\n|$)',
-            'passport_expiry': r'[Vv]alid\s+[Uu]ntil[:/\s]*(\d{2}\s*[A-Z]{3}\s*\d{4})(?:/|\n|$)'
+            'passport_number': [
+                r'PASSPORT\s*NO[.:\s]*([A-Z0-9]{6,12})',
+                r'DOCUMENT\s*NO[.:\s]*([A-Z0-9]{6,12})',
+                r'NO[.:\s]*([A-Z0-9]{6,12})',
+                r'[A-Z]\d{8}',  # Common passport number format
+                r'P<[A-Z]{3}[A-Z0-9]{6,10}[0-9]'  # MRZ format
+            ],
+            'surname': [
+                r'SURNAME[.:\s]*([A-Z\s]+?)(?=\n|Given|\s{2,}|$)',
+                r'LAST\s*NAME[.:\s]*([A-Z\s]+?)(?=\n|Given|\s{2,}|$)',
+                r'NOM[.:\s]*([A-Z\s]+?)(?=\n|Given|\s{2,}|$)'  # French
+            ],
+            'given_names': [
+                r'GIVEN\s*NAMES?[.:\s]*([A-Z\s]+?)(?=\n|Date|\s{2,}|$)',
+                r'FIRST\s*NAMES?[.:\s]*([A-Z\s]+?)(?=\n|Date|\s{2,}|$)',
+                r'PRENOM[.:\s]*([A-Z\s]+?)(?=\n|Date|\s{2,}|$)'  # French
+            ],
+            'nationality': [
+                r'NATIONALITY[.:\s]*([A-Z\s]+?)(?=\n|\s{2,}|$)',
+                r'NATIONALITE[.:\s]*([A-Z\s]+?)(?=\n|\s{2,}|$)'  # French
+            ],
+            'date_of_birth': [
+                r'DATE\s*OF\s*BIRTH[.:\s]*(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})',
+                r'DOB[.:\s]*(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})',
+                r'BIRTH\s*DATE[.:\s]*(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})'
+            ],
+            'gender': [
+                r'SEX[.:\s]*([MF])',
+                r'GENDER[.:\s]*([MF])',
+                r'SEXE[.:\s]*([MF])'  # French
+            ],
+            'date_of_expiry': [
+                r'EXPIRY\s*DATE[.:\s]*(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})',
+                r'EXPIRATION\s*DATE[.:\s]*(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})',
+                r'VALID\s*UNTIL[.:\s]*(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})'
+            ]
         }
         
-        for field, pattern in patterns.items():
-            match = re.search(pattern, text_content)
-            if match:
-                data[field] = match.group(1).strip()
+        # Try each pattern for each field
+        for field, field_patterns in patterns.items():
+            for pattern in field_patterns:
+                match = re.search(pattern, text)
+                if match:
+                    extracted_value = match.group(1).strip() if match.groups() else match.group(0).strip()
+                    data[field] = extracted_value
+                    logger.debug(f"Found {field}: {extracted_value} using pattern: {pattern}")
+                    break
+        
+        # Try to extract from MRZ if other methods fail
+        if data['passport_number'] == self.DEFAULT_VALUE:
+            mrz_data = self._extract_from_mrz(text)
+            data.update(mrz_data)
+        
+        return data
 
+    def _extract_from_mrz(self, text: str) -> Dict[str, str]:
+        """Extract data from passport MRZ (Machine Readable Zone)."""
+        data = {}
+        
+        # Look for MRZ pattern (two or three lines of 44 characters)
+        mrz_lines = []
+        lines = text.split('\n')
+        for line in lines:
+            # Clean the line
+            clean_line = re.sub(r'[^A-Z0-9<]', '', line.upper())
+            if len(clean_line) == 44 and '<' in clean_line:
+                mrz_lines.append(clean_line)
+        
+        if len(mrz_lines) >= 2:
+            try:
+                # First line format: P<ISSNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN
+                # Second line format: YYMMDDNM<YYMMDDNNNNNNNNNNNNNNNNNNNNN
+                
+                # Get passport number from first line
+                if len(mrz_lines[0]) >= 44:
+                    possible_number = re.search(r'[A-Z0-9]{9}', mrz_lines[0][5:44])
+                    if possible_number:
+                        data['passport_number'] = possible_number.group(0)
+                
+                # Get date of birth from second line
+                if len(mrz_lines[1]) >= 6:
+                    dob = mrz_lines[1][0:6]  # YYMMDD format
+                    try:
+                        year = int(dob[0:2])
+                        month = int(dob[2:4])
+                        day = int(dob[4:6])
+                        # Assume years 00-24 are 2000s, 25-99 are 1900s
+                        year = year + (2000 if year < 25 else 1900)
+                        data['date_of_birth'] = f"{day:02d}/{month:02d}/{year}"
+                    except ValueError:
+                        pass
+                
+            except Exception as e:
+                logger.debug(f"Error extracting from MRZ: {str(e)}")
+        
         return data
 
     def _extract_visa_data(self, text_content: str) -> Dict[str, str]:
         """Extract visa specific data."""
         data = {
-            'entry_permit_no': self.DEFAULT_VALUE,
-            'full_name': self.DEFAULT_VALUE,
-            'nationality': self.DEFAULT_VALUE,
-            'passport_number': self.DEFAULT_VALUE,
-            'date_of_birth': self.DEFAULT_VALUE,
-            'profession': self.DEFAULT_VALUE,
-            'visa_issue_date': self.DEFAULT_VALUE,
-            'visa_file_number': self.DEFAULT_VALUE,
-            'visa_issuance_emirate': self.DEFAULT_VALUE
+        'entry_permit_no': self.DEFAULT_VALUE,
+        'full_name': self.DEFAULT_VALUE,
+        'nationality': self.DEFAULT_VALUE,
+        'passport_number': self.DEFAULT_VALUE,
+        'date_of_birth': self.DEFAULT_VALUE,
+        'profession': self.DEFAULT_VALUE,
+        'visa_issue_date': self.DEFAULT_VALUE,
+        'visa_file_number': self.DEFAULT_VALUE,
+        'visa_issuance_emirate': self.DEFAULT_VALUE
         }
-        
+    
         patterns = {
-            'entry_permit_no': r'ENTRY PERMIT NO[:/\s]*(\d+\s*/\s*\d+\s*/\s*[\d/]+)',
-            'full_name': r'Full Name[:/\s]*([A-Z\s]+?)(?:\n|$)',
-            'nationality': r'Nationality[:/\s]*([A-Z\s]+?)(?:\n|$)',
-            'passport_number': r'Passport No[:/\s]*([A-Z0-9/]+?)(?:/|\n|$)',
-            'date_of_birth': r'Date of Birth[:/\s]*([\d/]+)',
-            'profession': r'Profession[:/\s]*([A-Z\s]+?)(?:\n|$)',
-            'visa_issue_date': r'Date & Place of Issue[:/\s]*([\d/]+)',
-            'visa_file_number': r'File No[.:/\s]*(\d+)'
+            'entry_permit_no': [
+                r'Entry permit no[.:\s]*(\d+\s*\/\s*\d+\s*\/\s*[\d\/]+)',
+                r'Permit number[.:\s]*(\d+\s*\/\s*\d+\s*\/\s*[\d\/]+)',
+                r'Permit No[.:\s]*(\d+\s*\/\s*\d+\s*\/\s*[\d\/]+)'
+            ],
+            'full_name': [
+                r'Full Name[.:\s]*([A-Z\s]+?)(?=\n|$)',
+                r'Name[.:\s]*([A-Z\s]+?)(?=\n|$)',
+                r'NAME[.:\s]*([A-Z\s]+?)(?=\n|$)'
+            ],
+            'nationality': [
+                r'Nationality[.:\s]*([A-Z\s]+?)(?=\n|$)',
+                r'NATIONALITY[.:\s]*([A-Z\s]+?)(?=\n|$)'
+            ],
+            'passport_number': [
+                r'Passport No[.:\s]*([A-Z0-9]+)(?=\n|$)',
+                r'Passport[.:\s]*([A-Z0-9]+)(?=\n|$)',
+                r'PASSPORT NO[.:\s]*([A-Z0-9]+)(?=\n|$)'
+            ],
+            'date_of_birth': [
+                r'Date of Birth[.:\s]*(\d{2}/\d{2}/\d{4})',
+                r'DOB[.:\s]*(\d{2}/\d{2}/\d{4})',
+                r'Birth Date[.:\s]*(\d{2}/\d{2}/\d{4})'
+            ],
+            'profession': [
+                r'Profession[.:\s]*([A-Z\s]+?)(?=\n|$)',
+                r'PROFESSION[.:\s]*([A-Z\s]+?)(?=\n|$)',
+                r'Occupation[.:\s]*([A-Z\s]+?)(?=\n|$)'
+            ],
+            'visa_issue_date': [
+                r'Date of Issue[.:\s]*(\d{2}/\d{2}/\d{4})',
+                r'Issue Date[.:\s]*(\d{2}/\d{2}/\d{4})',
+                r'Issued on[.:\s]*(\d{2}/\d{2}/\d{4})'
+            ]
         }
-        
-        for field, pattern in patterns.items():
-            match = re.search(pattern, text_content)
-            if match:
-                data[field] = match.group(1).strip()
-        
-        # Try to extract emirate from issue place
-        emirate_match = re.search(r'Issue[:/\s]*([A-Z\s]+?)(?:\n|$)', text_content)
-        if emirate_match:
-            data['visa_issuance_emirate'] = emirate_match.group(1).strip()
 
+        # Try each pattern for each field
+        for field, pattern_list in patterns.items():
+            for pattern in pattern_list:
+                match = re.search(pattern, text_content, re.IGNORECASE)
+                if match:
+                    data[field] = match.group(1).strip()
+                    break
+    
+        # Post-process name
+        if data['full_name'] != self.DEFAULT_VALUE:
+            # Remove duplicates in name while preserving order
+            name_parts = data['full_name'].split()
+            seen = set()
+            unique_parts = []
+            for part in name_parts:
+                if part not in seen:
+                    seen.add(part)
+                    unique_parts.append(part)
+            data['full_name'] = ' '.join(unique_parts)
+        
         return data
 
-    def _detect_document_type(self, text_content: str) -> str:
-        """Detect document type from content."""
-        # Check for Emirates ID
-        if re.search(r'Identity Card|بطاقة هوية', text_content, re.IGNORECASE) or \
-           re.search(r'784-\d{4}-\d{7}-\d{1}', text_content):
-            return 'emirates_id'
+    def detect_document_type(self, text_content: str) -> str:
+        """
+        Detect document type from content patterns.
+    
+        Args:
+            text_content: Extracted text from document
         
-        # Check for visa/entry permit
-        if re.search(r'ENTRY PERMIT|eVisa', text_content):
-            return 'visa'
+        Returns:
+            str: Document type ('visa', 'emirates_id', 'passport', or 'unknown')
+        """
+        # Convert to uppercase for consistent matching
+        text = text_content.upper()
+    
+        # Visa/Entry Permit patterns
+        visa_patterns = [
+            r'ENTRY\s+PERMIT',
+            r'PERMIT\s+NO',
+            r'VISA\s+FILE',
+            r'RESIDENCE\s+VISA',
+            r'\d{3}\s*/\s*\d{4}\s*/\s*\d+',  # Visa file number pattern
+        ]
         
-        # Check for passport
-        if re.search(r'PASSPORT|PASAPORTE', text_content, re.IGNORECASE):
-            return 'passport'
+        # Emirates ID patterns
+        eid_patterns = [
+            r'IDENTITY\s+CARD',
+            r'EMIRATES\s+ID',
+            r'ID\s+NUMBER',
+            r'\d{3}-\d{4}-\d{7}-\d{1}',  # Emirates ID number pattern
+            r'الهوية الإماراتية'  # Arabic text for Emirates ID
+        ]
         
+        # Passport patterns
+        passport_patterns = [
+            r'PASSPORT',
+            r'NATIONALITY',
+            r'DATE\s+OF\s+ISSUE',
+            r'PLACE\s+OF\s+BIRTH',
+            r'P<',  # Common pattern in machine readable passport lines
+            r'PASSEPORT',  # French
+            r'REISEPASS',  # German
+            r'جواز سفر'  # Arabic
+        ]
+        
+        # Check each pattern set
+        for pattern in visa_patterns:
+            if re.search(pattern, text):
+                logger.info(f"Detected visa document (pattern: {pattern})")
+                return 'visa'
+                
+        for pattern in eid_patterns:
+            if re.search(pattern, text):
+                logger.info(f"Detected Emirates ID (pattern: {pattern})")
+                return 'emirates_id'
+                
+        for pattern in passport_patterns:
+            if re.search(pattern, text):
+                logger.info(f"Detected passport (pattern: {pattern})")
+                return 'passport'
+        
+        logger.warning("Could not determine document type from content")
         return 'unknown'
 
-    @handle_errors(ErrorCategory.EXTERNAL_SERVICE, ErrorSeverity.HIGH)
-    @retry_on_error(max_attempts=3)
     def process_document(self, file_path: str, doc_type: Optional[str] = None) -> Dict[str, str]:
-        """Process document using AWS Textract."""
+        """
+        Process document and extract data.
+        
+        Args:
+            file_path: Path to document file
+            doc_type: Optional document type (will detect if not provided)
+            
+        Returns:
+            Dict containing extracted fields
+        """
         try:
-            with open(file_path, 'rb') as document:
-                file_bytes = document.read()
+            # Read file content
+            with open(file_path, 'rb') as f:
+                file_bytes = f.read()
 
+            # Get Textract response
             response = self.textract.analyze_document(
                 Document={'Bytes': file_bytes},
                 FeatureTypes=['FORMS', 'TABLES']
             )
 
+            # Extract text content
             text_content = '\n'.join(
                 block['Text'] for block in response['Blocks'] 
                 if block['BlockType'] == 'LINE'
             )
 
-            if not doc_type:
-                doc_type = self._detect_document_type(text_content)
-
-            logger.info(f"Processing {doc_type} document: {file_path}")
-
-            # Extract data based on document type
-            if doc_type == 'emirates_id':
-                return self._extract_emirates_id_data(text_content)
-            elif doc_type == 'passport':
-                return self._extract_passport_data(text_content)
-            elif doc_type == 'visa':
+            # Detect document type if not provided
+            detected_type = doc_type or self.detect_document_type(text_content)
+            
+            # Extract data based on detected type
+            if detected_type == 'visa':
                 return self._extract_visa_data(text_content)
+            elif detected_type == 'emirates_id':
+                return self._extract_emirates_id_data(text_content)
+            elif detected_type == 'passport':
+                return self._extract_passport_data(text_content)
             else:
+                logger.warning(f"Unknown document type for file: {file_path}")
                 return {}
 
-        except ClientError as e:
-            logger.error(f"AWS Textract error: {str(e)}")
-            raise ServiceError(f"Textract processing failed: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error processing document {file_path}: {str(e)}")
+            raise

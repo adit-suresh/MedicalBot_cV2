@@ -68,3 +68,4 @@ coverage.xml
 test_files/
 test_output/
 template.xlsx
+processed_submissions/

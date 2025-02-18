@@ -1,244 +1,251 @@
+from typing import Dict, Optional, List
 import pandas as pd
-import logging
-from typing import Dict, List, Optional
-from datetime import datetime
-import re
 import os
-from openpyxl import load_workbook
-
-from src.document_processor.textract_processor import TextractProcessor
-from src.document_processor.excel_processor import ExcelProcessor
-from src.utils.error_handling import ServiceError, handle_errors, ErrorCategory, ErrorSeverity
+import logging
+import re
+from src.utils.error_handling import ServiceError
 
 logger = logging.getLogger(__name__)
 
 class DataCombiner:
-    """Service for combining OCR and Excel data into template."""
-
-    def __init__(self, textract_processor: TextractProcessor, excel_processor: ExcelProcessor):
-        """Initialize with required processors."""
+    """Combines data from documents and Excel files."""
+    
+    def __init__(self, textract_processor, excel_processor):
         self.textract_processor = textract_processor
         self.excel_processor = excel_processor
-        self.DEFAULT_VALUE = "."
+        self.DEFAULT_VALUE = '.'
 
-    def combine_and_populate_template(self,
-                                   template_path: str,
-                                   output_path: str,
-                                   document_paths: Dict[str, str],
-                                   excel_path: Optional[str] = None) -> Dict[str, List[str]]:
+    def combine_and_populate_template(self, template_path: str, output_path: str, 
+                                    extracted_data: Dict, excel_data: Optional[pd.DataFrame] = None) -> Dict:
         """
         Combine data from all sources and populate template.
         
         Args:
             template_path: Path to Excel template
-            output_path: Path to save populated template
-            document_paths: Dict mapping document types to file paths
-            excel_path: Optional path to Excel data file
-            
-        Returns:
-            Dict containing success/failure info and any missing fields
+            output_path: Path to save output
+            extracted_data: Data extracted from documents
+            excel_data: DataFrame from original Excel
         """
         try:
-            # Extract data from documents
-            ocr_data = {}
-            for doc_type, file_path in document_paths.items():
-                extracted = self.textract_processor.process_document(file_path, doc_type)
-                ocr_data.update(extracted)
-
-            # Process Excel data if provided
-            excel_data = {}
-            if excel_path:
-                df, errors = self.excel_processor.process_excel(excel_path)
-                if not df.empty:
-                    excel_data = df.iloc[0].to_dict()  # Take first row
-
-            # Combine data with priority
-            combined_data = self._combine_data(ocr_data, excel_data)
-
-            # Map combined data to template format
-            template_data = self._map_to_template_format(combined_data)
-
-            # Populate template
-            self._populate_template(template_path, output_path, template_data)
-
-            # Validate required fields
-            missing_fields = self._validate_required_fields(template_data)
-
+            logger.info("Starting data combination process...")
+            
+            # Read template
+            template_df = pd.read_excel(template_path)
+            template_columns = template_df.columns.tolist()
+            
+            # Process data based on whether Excel data exists
+            if excel_data is not None and not excel_data.empty:
+                result_df = self._process_multiple_rows(extracted_data, excel_data, template_columns)
+            else:
+                result_df = self._process_single_row(extracted_data, template_columns)
+            
+            # Validate and clean result
+            result_df = self._clean_final_dataframe(result_df)
+            
+            # Save to output file
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            result_df.to_excel(output_path, index=False)
+            
+            logger.info(f"Successfully combined data into {output_path}")
             return {
                 'status': 'success',
-                'missing_fields': missing_fields,
-                'output_path': output_path
+                'output_path': output_path,
+                'rows_processed': len(result_df)
             }
 
         except Exception as e:
             logger.error(f"Error combining data: {str(e)}")
             raise ServiceError(f"Data combination failed: {str(e)}")
 
-    def _combine_data(self, ocr_data: Dict, excel_data: Dict) -> Dict:
-        """
-        Combine OCR and Excel data with priority rules.
-        Priority: Excel data for most fields, OCR data for identity documents.
-        """
-        # Start with all fields defaulted
-        combined = {
-            'contract_name': self.DEFAULT_VALUE,
-            'first_name': self.DEFAULT_VALUE,
-            'middle_name': self.DEFAULT_VALUE,
-            'last_name': self.DEFAULT_VALUE,
-            'effective_date': datetime.now().strftime('%Y-%m-%d'),
-            'dob': self.DEFAULT_VALUE,
-            'gender': self.DEFAULT_VALUE,
-            'marital_status': self.DEFAULT_VALUE,
-            'category': self.DEFAULT_VALUE,
-            'relation': self.DEFAULT_VALUE,
-            'principal_card_no': self.DEFAULT_VALUE,
-            'family_no': self.DEFAULT_VALUE,
-            'staff_id': self.DEFAULT_VALUE,
-            'nationality': self.DEFAULT_VALUE,
-            'emirates_id': self.DEFAULT_VALUE,
-            'unified_no': self.DEFAULT_VALUE,
-            'passport_no': self.DEFAULT_VALUE,
-            'work_country': 'UAE',
-            'work_emirate': self.DEFAULT_VALUE,
-            'work_region': self.DEFAULT_VALUE,
-            'residence_country': 'UAE',
-            'residence_emirate': self.DEFAULT_VALUE,
-            'residence_region': self.DEFAULT_VALUE,
-            'email': self.DEFAULT_VALUE,
-            'mobile_no': self.DEFAULT_VALUE,
-            'salary_band': self.DEFAULT_VALUE,
-            'commission': self.DEFAULT_VALUE,
-            'visa_issuance_emirate': self.DEFAULT_VALUE,
-            'visa_file_number': self.DEFAULT_VALUE,
-            'member_type': self.DEFAULT_VALUE
+    def _process_multiple_rows(self, extracted_data: Dict, excel_data: pd.DataFrame, 
+                             template_columns: List[str]) -> pd.DataFrame:
+        """Process multiple rows of data."""
+        result_rows = []
+        
+        for idx, excel_row in excel_data.iterrows():
+            # Clean and combine data for this row
+            cleaned_extracted = self._clean_extracted_data(extracted_data)
+            excel_dict = excel_row.to_dict()
+            cleaned_excel = self._clean_excel_data(excel_dict)
+            
+            # Combine data giving priority to Excel
+            combined_row = self._combine_row_data(cleaned_extracted, cleaned_excel)
+            
+            # Map to template format
+            mapped_row = self._map_to_template(combined_row, template_columns)
+            result_rows.append(mapped_row)
+        
+        return pd.DataFrame(result_rows)
+
+    def _process_single_row(self, extracted_data: Dict, template_columns: List[str]) -> pd.DataFrame:
+        """Process single row of data."""
+        cleaned_data = self._clean_extracted_data(extracted_data)
+        mapped_data = self._map_to_template(cleaned_data, template_columns)
+        return pd.DataFrame([mapped_data])
+
+    def _clean_extracted_data(self, data: Dict) -> Dict:
+        """Clean extracted document data."""
+        cleaned = {}
+        for key, value in data.items():
+            if isinstance(value, str):
+                # Remove extra whitespace and slashes
+                cleaned_value = value.strip().replace(' / ', '/').replace('  ', ' ')
+                cleaned[key] = cleaned_value if cleaned_value != '' else self.DEFAULT_VALUE
+            else:
+                cleaned[key] = self.DEFAULT_VALUE if value is None else str(value)
+        return cleaned
+
+    def _clean_excel_data(self, data: Dict) -> Dict:
+        """Clean Excel data."""
+        cleaned = {}
+        for key, value in data.items():
+            if pd.isna(value) or value == '' or str(value).lower() == 'nan':
+                cleaned[key] = self.DEFAULT_VALUE
+            elif isinstance(value, (int, float)):
+                cleaned[key] = str(int(value)) if value.is_integer() else str(value)
+            else:
+                cleaned[key] = str(value).strip()
+        return cleaned
+
+    def _combine_row_data(self, extracted: Dict, excel: Dict) -> Dict:
+        """Combine data with priority rules."""
+        combined = {}
+        
+        # Start with Excel data
+        combined.update(excel)
+        
+        # Field mapping for extracted data
+        field_map = {
+            'entry_permit_no': ['visa_file_number', 'unified_no'],
+            'full_name': ['first_name', 'last_name'],
+            'nationality': 'nationality',
+            'passport_number': ['passport_no', 'passport_number'],
+            'date_of_birth': ['dob', 'date_of_birth'],
+            'profession': ['occupation', 'profession'],
+            'visa_issue_date': 'visa_issue_date',
+            'visa_issuance_emirate': 'visa_issuance_emirate',
+            'emirates_id': 'emirates_id'
         }
-
-        # First, apply Excel data if available
-        if excel_data:
-            for field in combined.keys():
-                if field in excel_data and excel_data[field] not in [self.DEFAULT_VALUE, 'nan', '', None]:
-                    combined[field] = str(excel_data[field])
-
-        # Then, override with OCR data for specific fields
-        if ocr_data:
-            # Map OCR fields to template fields
-            ocr_mapping = {
-                'full_name': ['first_name', 'last_name'],  # Split full name
-                'nationality': 'nationality',
-                'passport_number': 'passport_no',
-                'emirates_id': 'emirates_id',
-                'date_of_birth': 'dob',
-                'sex': 'gender',  # Convert M/F to Male/Female
-                'visa_file_number': 'visa_file_number',
-                'visa_issuance_emirate': 'visa_issuance_emirate',
-                'entry_permit_no': 'unified_no'  # Use entry permit as unified no if not available
-            }
-
-            for ocr_field, template_field in ocr_mapping.items():
-                if ocr_field in ocr_data and ocr_data[ocr_field] != self.DEFAULT_VALUE:
-                    if isinstance(template_field, list):
-                        # Handle full name splitting
-                        if ocr_field == 'full_name':
-                            names = ocr_data[ocr_field].strip().split()
-                            if len(names) >= 2:
-                                if combined['first_name'] == self.DEFAULT_VALUE:
-                                    combined['first_name'] = names[0]
-                                if combined['last_name'] == self.DEFAULT_VALUE:
-                                    combined['last_name'] = ' '.join(names[1:])
-                    else:
-                        # Handle specific field conversions
-                        if ocr_field == 'sex':
-                            combined[template_field] = 'Male' if ocr_data[ocr_field] == 'M' else 'Female'
+        
+        # Override with extracted data using mapping
+        for ext_key, temp_keys in field_map.items():
+            if ext_key not in extracted or extracted[ext_key] == self.DEFAULT_VALUE:
+                continue
+                
+            if isinstance(temp_keys, list):
+                # Try multiple possible column names
+                for temp_key in temp_keys:
+                    if temp_key in combined and combined[temp_key] == self.DEFAULT_VALUE:
+                        if ext_key == 'full_name':
+                            self._handle_full_name(extracted[ext_key], combined)
                         else:
-                            if combined[template_field] == self.DEFAULT_VALUE:
-                                combined[template_field] = ocr_data[ocr_field]
-
-        # Post-processing
-        # Handle date formats
-        if combined['dob'] != self.DEFAULT_VALUE:
-            try:
-                dob = pd.to_datetime(combined['dob'], format='%d/%m/%Y', dayfirst=True)
-                combined['dob'] = dob.strftime('%Y-%m-%d')
-            except:
-                pass
-
-        # Format phone numbers
-        if combined['mobile_no'] != self.DEFAULT_VALUE:
-            number = re.sub(r'\D', '', combined['mobile_no'])
-            if len(number) == 9:
-                combined['mobile_no'] = f"+971{number}"
-            elif len(number) == 10 and number.startswith('0'):
-                combined['mobile_no'] = f"+971{number[1:]}"
-            elif len(number) >= 12:
-                combined['mobile_no'] = f"+{number}"
-
+                            combined[temp_key] = extracted[ext_key]
+                        break
+            else:
+                # Single column name
+                if temp_keys in combined and combined[temp_keys] == self.DEFAULT_VALUE:
+                    combined[temp_keys] = extracted[ext_key]
+        
         return combined
 
-    def _map_to_template_format(self, data: Dict) -> Dict:
-        """Map combined data to template format."""
-        # Add any specific formatting required by template
-        template_data = data.copy()
+    def _handle_full_name(self, full_name: str, combined: Dict) -> None:
+        """Handle splitting full name into parts."""
+        names = full_name.split()
+        if len(names) > 1:
+            if 'first_name' in combined and combined['first_name'] == self.DEFAULT_VALUE:
+                combined['first_name'] = ' '.join(names[:-1])
+            if 'last_name' in combined and combined['last_name'] == self.DEFAULT_VALUE:
+                combined['last_name'] = names[-1]
+
+    def _map_to_template(self, data: Dict, template_columns: List[str]) -> Dict:
+        """Map combined data to template columns."""
+        mapped = {}
         
-        # Format dates
-        if 'dob' in template_data and template_data['dob'] != self.DEFAULT_VALUE:
-            try:
-                dob = pd.to_datetime(template_data['dob'])
-                template_data['dob'] = dob.strftime('%Y-%m-%d')
-            except:
-                template_data['dob'] = self.DEFAULT_VALUE
+        # Create reverse mapping for variations
+        reverse_map = {
+            'passport_no': ['passport_number', 'passport'],
+            'emirates_id': ['eid', 'emiratesid', 'emirates_id_number'],
+            'first_name': ['firstname', 'fname'],
+            'last_name': ['lastname', 'lname']
+        }
+        
+        for col in template_columns:
+            col_key = self._normalize_column_name(col)
+            
+            # Check direct match
+            if col_key in data:
+                mapped[col] = data[col_key]
+                continue
+                
+            # Check variations
+            found = False
+            for main_key, variations in reverse_map.items():
+                if col_key in variations and main_key in data:
+                    mapped[col] = data[main_key]
+                    found = True
+                    break
+                    
+            if not found:
+                mapped[col] = self.DEFAULT_VALUE
+                
+        return mapped
 
-        # Format phone numbers
-        if template_data.get('mobile_no') != self.DEFAULT_VALUE:
-            phone = template_data['mobile_no']
-            if not phone.startswith('+971'):
-                phone = '+971' + phone.lstrip('0')
-            template_data['mobile_no'] = phone
+    def _normalize_column_name(self, column: str) -> str:
+        """Normalize column names for mapping."""
+        if not isinstance(column, str):
+            return ''
+            
+        # Clean name
+        clean_name = column.lower().strip()
+        clean_name = re.sub(r'[^a-z0-9\s_]', '', clean_name)
+        clean_name = clean_name.replace(' ', '_')
+        
+        # Common variations mapping
+        name_map = {
+            'passport_no': 'passport_number',
+            'eid': 'emirates_id',
+            'dob': 'date_of_birth',
+            'fname': 'first_name',
+            'lname': 'last_name'
+        }
+        
+        return name_map.get(clean_name, clean_name)
 
-        return template_data
+    def _clean_final_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Clean and validate final DataFrame."""
+        # Replace NaN/None with default value
+        df = df.fillna(self.DEFAULT_VALUE)
+        
+        # Convert all values to strings
+        for col in df.columns:
+            df[col] = df[col].astype(str)
+            df[col] = df[col].apply(lambda x: x.strip() if x != self.DEFAULT_VALUE else x)
+            
+        # Handle date columns
+        date_columns = ['dob', 'date_of_birth', 'effective_date', 
+                       'passport_expiry_date', 'visa_expiry_date']
+        
+        for col in date_columns:
+            if col in df.columns:
+                df[col] = df[col].apply(self._format_date)
+                
+        return df
 
-    def _populate_template(self, template_path: str, output_path: str, data: Dict) -> None:
-        """Populate Excel template with data."""
-        # Copy template
-        import shutil
-        shutil.copy2(template_path, output_path)
-
-        # Load workbook
-        workbook = load_workbook(output_path)
-        sheet = workbook['Sample Template']
-
-        # Find column indices from header row
-        headers = {}
-        for col in range(1, sheet.max_column + 1):
-            cell_value = sheet.cell(row=1, column=col).value
-            if cell_value:
-                field_name = self._clean_field_name(cell_value)
-                headers[field_name] = col
-
-        # Populate data in first empty row
-        row = 2  # Start after header
-        while sheet.cell(row=row, column=1).value is not None:
-            row += 1
-
-        # Write data
-        for field, value in data.items():
-            if field in headers:
-                sheet.cell(row=row, column=headers[field], value=value)
-
-        # Save workbook
-        workbook.save(output_path)
-
-    def _clean_field_name(self, field_name: str) -> str:
-        """Clean field name to match dictionary keys."""
-        return (field_name.lower()
-                .replace(' ', '_')
-                .replace('/', '_')
-                .replace('-', '_')
-                .strip('_'))
-
-    def _validate_required_fields(self, data: Dict) -> List[str]:
-        """Validate all required fields are populated."""
-        missing = []
-        for field, value in data.items():
-            if value == self.DEFAULT_VALUE:
-                missing.append(field)
-        return missing
+    def _format_date(self, date_str: str) -> str:
+        """Format date string to YYYY-MM-DD."""
+        if date_str == self.DEFAULT_VALUE:
+            return date_str
+            
+        try:
+            # Try different date formats
+            for fmt in ['%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y', '%d-%m-%Y']:
+                try:
+                    return pd.to_datetime(date_str, format=fmt).strftime('%Y-%m-%d')
+                except:
+                    continue
+            
+            # If no format works, try pandas default parser
+            return pd.to_datetime(date_str).strftime('%Y-%m-%d')
+            
+        except:
+            return date_str

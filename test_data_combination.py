@@ -1,143 +1,81 @@
 import os
 import logging
-from datetime import datetime
-from dotenv import load_dotenv
-import pandas as pd
-
 from src.document_processor.textract_processor import TextractProcessor
 from src.document_processor.excel_processor import ExcelProcessor
 from src.services.data_combiner import DataCombiner
+import pandas as pd
 
-# Configure detailed logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Configure logging
+logging.basicConfig(level=logging.INFO, 
+                   format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 def test_data_combination():
-    """Test complete data combination workflow with detailed logging."""
-    
+    """Test data combination with multiple rows."""
     # Initialize processors
-    textract_processor = TextractProcessor()
+    textract = TextractProcessor()
     excel_processor = ExcelProcessor()
-    data_combiner = DataCombiner(textract_processor, excel_processor)
+    data_combiner = DataCombiner(textract, excel_processor)
     
-    # Test files
-    test_files_dir = "test_files"
-    document_paths = {}
-    excel_path = None
-    
-    logger.info("Scanning for documents...")
-    
-    # Collect test files with better detection
-    for filename in os.listdir(test_files_dir):
-        file_path = os.path.join(test_files_dir, filename)
-        
-        # Detect document types
-        if filename.lower().endswith(('.pdf', '.jpg', '.jpeg', '.png')):
-            # Check file content or name to determine type
-            if 'passport' in filename.lower():
-                document_paths['passport'] = file_path
-                logger.info(f"Found passport document: {filename}")
-            elif 'emirates' in filename.lower() or 'eid' in filename.lower():
-                document_paths['emirates_id'] = file_path
-                logger.info(f"Found Emirates ID document: {filename}")
-            elif 'visa' in filename.lower():
-                document_paths['visa'] = file_path
-                logger.info(f"Found visa document: {filename}")
-                
-        elif filename.lower().endswith(('.xlsx', '.xls')):
-            if 'template' in filename.lower():
-                template_path = file_path
-                logger.info(f"Found template file: {filename}")
-            elif not excel_path:  # Take first non-template Excel file
-                excel_path = file_path
-                logger.info(f"Found data Excel file: {filename}")
-    
-    # Verify files
-    logger.info("\nVerifying documents...")
-    if not document_paths:
-        logger.warning("No documents found!")
-    else:
-        logger.info(f"Found documents: {list(document_paths.keys())}")
-    
-    if not excel_path:
-        logger.warning("No Excel data file found!")
-    
-    template_path = os.path.join(test_files_dir, "template.xlsx")
-    if not os.path.exists(template_path):
-        logger.error("Template file not found!")
-        return
-    
-    # Create output directory
-    output_dir = "test_output"
-    os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(
-        output_dir,
-        f"populated_template_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    )
+    # Create test output directory
+    os.makedirs("test_output", exist_ok=True)
     
     try:
-        # Process each document first to verify extraction
-        logger.info("\nTesting individual document extraction:")
-        for doc_type, file_path in document_paths.items():
-            logger.info(f"\nProcessing {doc_type}...")
-            try:
-                extracted_data = textract_processor.process_document(file_path, doc_type)
-                logger.info("Extracted data:")
-                for key, value in extracted_data.items():
-                    logger.info(f"  {key}: {value}")
-            except Exception as e:
-                logger.error(f"Error processing {doc_type}: {str(e)}")
+        # Step 1: Process document
+        test_doc = "test_files/27715 VISA.pdf"
+        logger.info(f"Processing document: {test_doc}")
+        extracted_data = textract.process_document(test_doc, 'visa')
         
-        # Process Excel if available
-        if excel_path:
-            logger.info("\nProcessing Excel data:")
-            try:
-                df, errors = excel_processor.process_excel(excel_path)
-                if not df.empty:
-                    logger.info("Excel data (first row):")
-                    for col in df.columns:
-                        logger.info(f"  {col}: {df[col].iloc[0]}")
-                if errors:
-                    logger.warning("Excel validation errors:")
-                    for error in errors:
-                        logger.warning(f"  {error}")
-            except Exception as e:
-                logger.error(f"Error processing Excel: {str(e)}")
+        logger.info("\nExtracted Data:")
+        for key, value in extracted_data.items():
+            logger.info(f"{key}: {value}")
         
-        # Combine data and populate template
-        logger.info("\nCombining data and populating template...")
+        # Step 2: Process Excel
+        test_excel = "test_files/QIC -ADDITION - AUH.xlsx"
+        logger.info(f"\nProcessing Excel: {test_excel}")
+        excel_df, excel_errors = excel_processor.process_excel(test_excel, dayfirst=True)
+        
+        if not excel_df.empty:
+            logger.info(f"Excel rows found: {len(excel_df)}")
+            logger.info("\nFirst row of Excel data:")
+            for col in excel_df.columns:
+                logger.info(f"{col}: {excel_df.iloc[0][col]}")
+        
+        # Step 3: Combine data
+        output_path = os.path.join("test_output", "combined_data_test.xlsx")
+        logger.info(f"\nCombining data to: {output_path}")
+        
         result = data_combiner.combine_and_populate_template(
-            template_path,
+            "test_files/template.xlsx",
             output_path,
-            document_paths,
-            excel_path
+            extracted_data,
+            excel_df
         )
         
-        # Check results
+        # Step 4: Validate result
         if result['status'] == 'success':
-            logger.info("Template populated successfully!")
-            logger.info(f"Output file: {result['output_path']}")
+            logger.info(f"\nSuccessfully processed {result['rows_processed']} rows")
             
-            if result['missing_fields']:
-                logger.warning("\nMissing fields:")
-                for field in result['missing_fields']:
-                    logger.warning(f"- {field}")
-            else:
-                logger.info("\nAll required fields populated!")
-                
+            # Read and validate output
+            output_df = pd.read_excel(output_path)
+            logger.info(f"\nOutput file rows: {len(output_df)}")
+            
+            # Check first row
+            logger.info("\nFirst row of output data:")
+            for col in output_df.columns:
+                value = output_df.iloc[0][col]
+                if value != '.':  # Only show non-default values
+                    logger.info(f"{col}: {value}")
+            
+            return True
+            
         else:
-            logger.error(f"Data combination failed: {result.get('error')}")
+            logger.error(f"Combination failed: {result.get('error')}")
+            return False
             
     except Exception as e:
         logger.error(f"Test failed: {str(e)}")
-        raise
+        return False
 
 if __name__ == "__main__":
-    # Load environment variables
-    load_dotenv()
-    
-    # Run test
     test_data_combination()
