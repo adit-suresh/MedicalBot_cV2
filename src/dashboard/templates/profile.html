@@ -1,0 +1,206 @@
+{% extends 'base.html' %}
+
+{% block title %}User Profile - {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-12">
+        <h1 class="h3 mb-0 text-gray-800">User Profile</h1>
+        <p class="text-muted">Manage your account details</p>
+    </div>
+</div>
+
+<div class="row">
+    <!-- User Profile Card -->
+    <div class="col-xl-4 col-md-6 mb-4">
+        <div class="card shadow">
+            <div class="card-header py-3">
+                <h6 class="m-0 font-weight-bold text-primary">Profile Information</h6>
+            </div>
+            <div class="card-body">
+                <div class="text-center mb-4">
+                    <img src="https://ui-avatars.com/api/?name={{ user.name }}&background=random&size=128" 
+                         alt="User Avatar" class="rounded-circle img-thumbnail" style="width: 150px; height: 150px;">
+                    <h4 class="mt-3">{{ user.name }}</h4>
+                    <span class="badge bg-primary text-uppercase mb-2">{{ user.role }}</span>
+                </div>
+                
+                <table class="table">
+                    <tbody>
+                        <tr>
+                            <th scope="row">Username</th>
+                            <td>{{ user.username }}</td>
+                        </tr>
+                        <tr>
+                            <th scope="row">Email</th>
+                            <td>{{ user.email }}</td>
+                        </tr>
+                        <tr>
+                            <th scope="row">Account Created</th>
+                            <td>{{ user.created_at|replace('T', ' ')|truncate(16, true, '') }}</td>
+                        </tr>
+                        <tr>
+                            <th scope="row">Last Login</th>
+                            <td>
+                                {% if user.last_login %}
+                                    {{ user.last_login|replace('T', ' ')|truncate(16, true, '') }}
+                                {% else %}
+                                    Never
+                                {% endif %}
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Change Password Card -->
+    <div class="col-xl-8 col-md-6 mb-4">
+        <div class="card shadow">
+            <div class="card-header py-3">
+                <h6 class="m-0 font-weight-bold text-primary">Change Password</h6>
+            </div>
+            <div class="card-body">
+                <form action="{{ url_for('auth.change_password') }}" method="post">
+                    <div class="mb-3">
+                        <label for="current_password" class="form-label">Current Password <span class="text-danger">*</span></label>
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="current_password" name="current_password" required>
+                            <button class="btn btn-outline-secondary toggle-password" type="button" data-target="current_password">
+                                <i class="far fa-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="new_password" class="form-label">New Password <span class="text-danger">*</span></label>
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="new_password" name="new_password" 
+                                   required minlength="8">
+                            <button class="btn btn-outline-secondary toggle-password" type="button" data-target="new_password">
+                                <i class="far fa-eye"></i>
+                            </button>
+                        </div>
+                        <div class="form-text">
+                            Password must be at least 8 characters long.
+                        </div>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <label for="confirm_password" class="form-label">Confirm New Password <span class="text-danger">*</span></label>
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="confirm_password" name="confirm_password" required>
+                            <button class="btn btn-outline-secondary toggle-password" type="button" data-target="confirm_password">
+                                <i class="far fa-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div id="password-match-alert" class="alert alert-danger d-none">
+                        Passwords do not match!
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary" id="submit-btn">
+                        <i class="fas fa-key me-1"></i> Change Password
+                    </button>
+                </form>
+            </div>
+        </div>
+        
+        <!-- Account Activity Card -->
+        <div class="card shadow mt-4">
+            <div class="card-header py-3">
+                <h6 class="m-0 font-weight-bold text-primary">Recent Account Activity</h6>
+            </div>
+            <div class="card-body">
+                <!-- This is a placeholder, as we don't have actual activity data yet -->
+                <div class="list-group">
+                    <div class="list-group-item">
+                        <div class="d-flex w-100 justify-content-between">
+                            <h6 class="mb-1">Login</h6>
+                            <small>{{ user.last_login|replace('T', ' ')|truncate(16, true, '') if user.last_login else 'Never' }}</small>
+                        </div>
+                        <p class="mb-1 small">Successful login from 192.168.1.1</p>
+                    </div>
+                    <div class="list-group-item">
+                        <div class="d-flex w-100 justify-content-between">
+                            <h6 class="mb-1">Password Changed</h6>
+                            <small>2025-02-01 10:25</small>
+                        </div>
+                        <p class="mb-1 small">Password successfully updated</p>
+                    </div>
+                    <div class="list-group-item">
+                        <div class="d-flex w-100 justify-content-between">
+                            <h6 class="mb-1">Account Created</h6>
+                            <small>{{ user.created_at|replace('T', ' ')|truncate(16, true, '') }}</small>
+                        </div>
+                        <p class="mb-1 small">Account was created</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if session.get('user_role') == 'admin' %}
+<!-- Admin Only Section -->
+<div class="row mt-2">
+    <div class="col-12 mb-4">
+        <div class="card shadow">
+            <div class="card-header py-3">
+                <h6 class="m-0 font-weight-bold text-primary">User Management</h6>
+            </div>
+            <div class="card-body">
+                <p>As an administrator, you can manage other user accounts here.</p>
+                <a href="#" class="btn btn-primary">
+                    <i class="fas fa-users-cog me-1"></i> Manage Users
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    $(document).ready(function() {
+        // Toggle password visibility
+        $('.toggle-password').on('click', function() {
+            const targetId = $(this).data('target');
+            const input = document.getElementById(targetId);
+            const icon = $(this).find('i');
+            
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.removeClass('fa-eye').addClass('fa-eye-slash');
+            } else {
+                input.type = 'password';
+                icon.removeClass('fa-eye-slash').addClass('fa-eye');
+            }
+        });
+        
+        // Check if passwords match
+        $('#confirm_password, #new_password').on('keyup', function() {
+            const newPassword = $('#new_password').val();
+            const confirmPassword = $('#confirm_password').val();
+            const alert = $('#password-match-alert');
+            const submitBtn = $('#submit-btn');
+            
+            if (newPassword && confirmPassword) {
+                if (newPassword !== confirmPassword) {
+                    alert.removeClass('d-none');
+                    submitBtn.prop('disabled', true);
+                } else {
+                    alert.addClass('d-none');
+                    submitBtn.prop('disabled', false);
+                }
+            } else {
+                alert.addClass('d-none');
+                submitBtn.prop('disabled', false);
+            }
+        });
+    });
+</script>
+{% endblock %}

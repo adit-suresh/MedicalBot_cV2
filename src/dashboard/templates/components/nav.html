@@ -1,0 +1,52 @@
+<div class="sidebar">
+    <div class="sidebar-header">
+        <div class="logo-container">
+            <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Logo" class="logo">
+        </div>
+        <h5 class="sidebar-title">{{ app_name }}</h5>
+    </div>
+    
+    <ul class="nav flex-column">
+        <li class="nav-item">
+            <a class="nav-link {% if request.endpoint == 'main.index' %}active{% endif %}" href="{{ url_for('main.index') }}">
+                <i class="fas fa-tachometer-alt me-2"></i> Dashboard
+            </a>
+        </li>
+        
+        <li class="nav-item">
+            <a class="nav-link {% if request.endpoint == 'main.reports' %}active{% endif %}" href="{{ url_for('main.reports') }}">
+                <i class="fas fa-chart-bar me-2"></i> Reports
+            </a>
+        </li>
+        
+        {% if session.get('user_role') == 'admin' %}
+        <li class="nav-divider">
+            <hr>
+            <span class="sidebar-heading">Administration</span>
+        </li>
+        
+        <li class="nav-item">
+            <a class="nav-link" href="{{ url_for('auth.profile') }}">
+                <i class="fas fa-users-cog me-2"></i> User Management
+            </a>
+        </li>
+        
+        <li class="nav-item">
+            <a class="nav-link" href="#">
+                <i class="fas fa-cog me-2"></i> System Settings
+            </a>
+        </li>
+        {% endif %}
+    </ul>
+    
+    <div class="sidebar-footer">
+        <div class="d-flex justify-content-center">
+            <a href="#" class="btn btn-sm btn-outline-secondary me-2" title="Help">
+                <i class="fas fa-question-circle"></i>
+            </a>
+            <a href="{{ url_for('auth.logout') }}" class="btn btn-sm btn-outline-secondary" title="Logout">
+                <i class="fas fa-sign-out-alt"></i>
+            </a>
+        </div>
+    </div>
+</div>

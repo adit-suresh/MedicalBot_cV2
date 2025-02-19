@@ -1,0 +1,36 @@
+2025-02-19 15:26:59,228 - __main__ - INFO - Running test: Dependency Container
+2025-02-19 15:26:59,293 - __main__ - INFO - Dependency container tests completed successfully
+2025-02-19 15:26:59,293 - __main__ - INFO - Running test: Error Handling
+2025-02-19 15:27:00,107 - __main__ - ERROR - Error handling test failed: module 'logging' has no attribute 'handlers'
+2025-02-19 15:27:00,108 - __main__ - INFO - Running test: Document Processing
+2025-02-19 15:27:00,725 - __main__ - ERROR - Document processing test failed: retry_on_error() got an unexpected keyword argument 'base_delay'
+2025-02-19 15:27:00,725 - __main__ - INFO - Running test: Email Handler
+2025-02-19 15:27:01,100 - __main__ - ERROR - Email handler test failed: failed to find libmagic.  Check your installation
+2025-02-19 15:27:01,100 - __main__ - INFO - Running test: Data Integration
+2025-02-19 15:27:03,087 - __main__ - ERROR - Data integration test failed: type object 'ErrorCategory' has no attribute 'PROCESSING'
+2025-02-19 15:27:03,087 - __main__ - INFO - Running test: Process Control
+2025-02-19 15:27:03,128 - __main__ - ERROR - Process control test failed: Can't instantiate abstract class ProcessControl without an implementation for abstract method '_create_tables'
+2025-02-19 15:27:03,128 - __main__ - ERROR - Traceback (most recent call last):
+  File "C:\NewTech Projects\MedicalBot_cV2\test_refactored_components.py", line 338, in test_process_control
+    process_control = ProcessControl(temp_db)
+                      ^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: Can't instantiate abstract class ProcessControl without an implementation for abstract method '_create_tables'
+
+2025-02-19 15:30:58,221 - __main__ - INFO - Running test: Dependency Container
+2025-02-19 15:30:58,237 - __main__ - INFO - Dependency container tests completed successfully
+2025-02-19 15:30:58,237 - __main__ - INFO - Running test: Error Handling
+2025-02-19 15:30:58,321 - __main__ - ERROR - Error handling test failed: module 'logging' has no attribute 'handlers'
+2025-02-19 15:30:58,321 - __main__ - INFO - Running test: Document Processing
+2025-02-19 15:30:58,402 - __main__ - ERROR - Document processing test failed: retry_on_error() got an unexpected keyword argument 'base_delay'
+2025-02-19 15:30:58,402 - __main__ - INFO - Running test: Email Handler
+2025-02-19 15:30:58,444 - __main__ - ERROR - Email handler test failed: failed to find libmagic.  Check your installation
+2025-02-19 15:30:58,444 - __main__ - INFO - Running test: Data Integration
+2025-02-19 15:30:58,679 - __main__ - ERROR - Data integration test failed: type object 'ErrorCategory' has no attribute 'PROCESSING'
+2025-02-19 15:30:58,679 - __main__ - INFO - Running test: Process Control
+2025-02-19 15:30:58,679 - __main__ - ERROR - Process control test failed: Can't instantiate abstract class ProcessControl without an implementation for abstract method '_create_tables'
+2025-02-19 15:30:58,679 - __main__ - ERROR - Traceback (most recent call last):
+  File "C:\NewTech Projects\MedicalBot_cV2\test_refactored_components.py", line 338, in test_process_control
+    process_control = ProcessControl(temp_db)
+                      ^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: Can't instantiate abstract class ProcessControl without an implementation for abstract method '_create_tables'
+
