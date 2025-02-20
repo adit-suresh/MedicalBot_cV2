@@ -17,7 +17,7 @@ class DataIntegrator:
         self.textract_processor = textract_processor
         self.excel_processor = excel_processor
 
-    @handle_errors(ErrorCategory.PROCESSING, ErrorSeverity.HIGH)
+    @handle_errors(ErrorCategory.PROCESS, ErrorSeverity.HIGH)
     def process_documents(self, 
                         document_paths: Dict[str, str],
                         excel_path: Optional[str] = None) -> Tuple[pd.DataFrame, List[Dict]]:
@@ -63,15 +63,40 @@ class DataIntegrator:
                 })
 
         # Combine data sources
-        combined_df = self._combine_data(docs_df, excel_df)
+        combined_df = self.combine_data(docs_df, excel_df)
         
         # Validate combined data
         validation_errors = self._validate_combined_data(combined_df)
         errors.extend(validation_errors)
 
         return combined_df, errors
+    
+    def integrate_data(self, excel_data, ocr_data):
+        # Convert excel_data to a DataFrame if it's not one already.
+        if not isinstance(excel_data, pd.DataFrame):
+            if isinstance(excel_data, dict):
+                # If the dict is non-empty, assume it represents a single record.
+                excel_data = pd.DataFrame([excel_data]) if excel_data else pd.DataFrame()
+            else:
+                excel_data = pd.DataFrame(excel_data)
+                
+        # Convert ocr_data similarly.
+        if not isinstance(ocr_data, pd.DataFrame):
+            if isinstance(ocr_data, dict):
+                ocr_data = pd.DataFrame([ocr_data]) if ocr_data else pd.DataFrame()
+            else:
+                ocr_data = pd.DataFrame(ocr_data)
+        
+        # Now, for demonstration, let's assume integration is simply merging the data.
+        # Adjust the merging logic as needed per your actual business rules.
+        if excel_data.empty and ocr_data.empty:
+            return pd.DataFrame()  # No data available.
+        
+        # For example, concatenate along columns. In real usage, you might want a more sophisticated merge.
+        integrated_data = pd.concat([excel_data, ocr_data], axis=1)
+        return integrated_data
 
-    def _combine_data(self, docs_df: pd.DataFrame, excel_df: Optional[pd.DataFrame]) -> pd.DataFrame:
+    def combine_data(self, docs_df: pd.DataFrame, excel_df: Optional[pd.DataFrame]) -> pd.DataFrame:
         """
         Combine document and Excel data.
         

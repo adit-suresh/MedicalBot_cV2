@@ -158,61 +158,82 @@ class OutlookClient:
 
     @handle_errors(ErrorCategory.NETWORK, ErrorSeverity.HIGH)
     def fetch_emails(self, last_check_time: Optional[datetime] = None) -> List[Dict]:
-        """Fetch emails from target mailbox with improved filtering and pagination.
+        """
+        Fetch emails from target mailbox with incremental filtering.
         
-        Args:
-            last_check_time: Optional datetime to filter emails by received time
-            
+        If last_check_time is provided, it is used directly; otherwise, the method
+        will attempt to fetch emails from these incremental time windows:
+         - Last 1 hour
+         - Last 12 hours
+         - Last 1 day
+         
         Returns:
-            List of email dictionaries
+            List of email dictionaries that pass client-side filtering.
             
         Raises:
-            EmailFetchError: If fetching emails fails
+            EmailFetchError: If fetching emails fails.
+        """
+        if last_check_time is not None:
+            return self._fetch_emails_with_last_check(last_check_time)
+        else:
+            now = datetime.now()
+            # Define incremental time windows: last hour, last day, last week.
+            time_windows = [now - timedelta(hours=1), now - timedelta(hours=12), now - timedelta(days=1)]
+            for window in time_windows:
+                logger.info(f"Trying to fetch emails since {window.isoformat()}...")
+                emails = self._fetch_emails_with_last_check(window)
+                if emails:
+                    logger.info(f"Found {len(emails)} emails since {window.isoformat()}.")
+                    return emails
+            logger.info("No emails found in incremental time windows.")
+            return []
+
+    def _fetch_emails_with_last_check(self, last_check_time: datetime) -> List[Dict]:
+        """
+        Internal helper that fetches emails using the given last_check_time.
+        Uses the existing pagination, filtering, and sorting logic.
         """
         try:
             emails = []
             next_link = None
             
-            logger.info(f"Fetching emails from {TARGET_MAILBOX}" + 
-                       (f" since {last_check_time.isoformat()}" if last_check_time else ""))
+            logger.info(f"Fetching emails from {TARGET_MAILBOX} since {last_check_time.isoformat()}")
             
-            # Build initial request parameters
+            # Build request parameters using the given last_check_time.
             params = self._build_email_params(last_check_time)
             endpoint = f"{GRAPH_API_ENDPOINT}/users/{self.target_mailbox}/messages"
             
-            # Use pagination to get all results
+            # Use pagination to retrieve emails.
             while True:
                 if next_link:
-                    # Use next link for pagination
                     response = self._execute_request("GET", next_link)
                 else:
-                    # Initial request
                     response = self._execute_request("GET", endpoint, params=params)
                 
-                # Process response
                 data = response.json()
                 batch = data.get("value", [])
                 
-                # Filter emails in batch
+                # Filter emails in this batch (subject filtering, importance, etc.)
                 filtered_batch = self._filter_emails(batch)
                 if filtered_batch:
                     logger.info(f"Found {len(filtered_batch)} matching emails in current batch")
                     emails.extend(filtered_batch)
                 
-                # Check for more pages
+                # Check for more pages.
                 if "@odata.nextLink" in data:
                     next_link = data["@odata.nextLink"]
-                    # Avoid excessive logging
                     if len(emails) % 50 == 0:
                         logger.info(f"Fetched {len(emails)} emails so far, retrieving more...")
                 else:
                     break
-                    
-                # Safety limit to prevent excessive pagination
+                
+                # Safety limit to prevent excessive pagination.
                 if len(emails) >= MAX_EMAIL_FETCH * 10:
                     logger.warning(f"Reached safety limit of {MAX_EMAIL_FETCH * 10} emails, stopping pagination")
                     break
             
+            # Sort emails by receivedDateTime (newest first).
+            emails.sort(key=lambda email: email.get('receivedDateTime', ''), reverse=True)
             logger.info(f"Total emails fetched: {len(emails)}")
             return emails
 
@@ -368,8 +389,7 @@ class OutlookClient:
         # Base parameters
         params = {
             "$top": str(MAX_EMAIL_FETCH),
-            "$select": "id,subject,receivedDateTime,hasAttachments,importance,from",
-            "$orderby": "receivedDateTime desc"
+            "$select": "id,subject,receivedDateTime,hasAttachments,importance,from"
         }
         
         # Build filter conditions
@@ -382,16 +402,6 @@ class OutlookClient:
         
         # Only emails with attachments
         filters.append("hasAttachments eq true")
-        
-        # Subject filter with keywords for efficient server-side filtering
-        subject_conditions = []
-        for keyword in SUBJECT_KEYWORDS:
-            # Use contains function for case-insensitive matching
-            subject_conditions.append(f"contains(tolower(subject),'{keyword.lower()}')")
-            
-        if subject_conditions:
-            subject_filter = f"({' or '.join(subject_conditions)})"
-            filters.append(subject_filter)
         
         # Combine all filters
         if filters:
@@ -417,6 +427,10 @@ class OutlookClient:
             # Skip emails without attachments (though the server filter should catch this)
             if not email.get('hasAttachments', False):
                 continue
+            
+            subject = email.get('subject', '').lower()
+            if any(keyword.lower() in subject for keyword in SUBJECT_KEYWORDS):
+                filtered_emails.append(email)
                 
             # Check for keywords in subject
             subject = email.get('subject', '').lower()

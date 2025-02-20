@@ -110,7 +110,7 @@ class AttachmentHandler:
                 
         return False
 
-    @handle_errors(ErrorCategory.PROCESSING, ErrorSeverity.MEDIUM)
+    @handle_errors(ErrorCategory.PROCESS, ErrorSeverity.MEDIUM)
     def save_attachment(self, attachment: Dict, email_id: str) -> str:
         """
         Save attachment to disk with improved security and error handling.
@@ -249,7 +249,7 @@ class AttachmentHandler:
         # Default to permissive for unrecognized types
         return True
 
-    @handle_errors(ErrorCategory.PROCESSING, ErrorSeverity.MEDIUM)
+    @handle_errors(ErrorCategory.PROCESS, ErrorSeverity.MEDIUM)
     def process_attachments(self, attachments: List[Dict], email_id: str) -> List[str]:
         """
         Process and save all valid attachments from an email with enhanced error handling.

@@ -96,7 +96,7 @@ class DataCombiner:
             'salary', 'age', 'dependents', 'family_no'
         }
 
-    @handle_errors(ErrorCategory.PROCESSING, ErrorSeverity.MEDIUM)
+    @handle_errors(ErrorCategory.PROCESS, ErrorSeverity.MEDIUM)
     def combine_and_populate_template(self, template_path: str, output_path: str, 
                                     extracted_data: Dict, excel_data: Optional[pd.DataFrame] = None) -> Dict:
         """

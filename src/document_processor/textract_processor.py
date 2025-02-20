@@ -156,7 +156,7 @@ class TextractProcessor:
             logger.error(f"Failed to read file {file_path}: {str(e)}")
             raise ServiceError(f"File read error: {str(e)}")
     
-    @retry_on_error(max_attempts=3, base_delay=1.0)
+    @retry_on_error(max_attempts=3)
     def _get_textract_response(self, file_bytes: bytes) -> Dict:
         """Get Textract response with retry logic."""
         try:

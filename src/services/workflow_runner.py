@@ -12,6 +12,7 @@ from src.document_processor.textract_processor import TextractProcessor
 from src.document_processor.excel_processor import ExcelProcessor
 from src.services.data_combiner import DataCombiner
 from src.utils.process_tracker import ProcessTracker
+from src.services.data_integrator import DataIntegrator
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +152,33 @@ class WorkflowRunner:
         elif 'visa' in name:
             return 'visa'
         return 'unknown'
+    
+    def run(self):
+        # Wrap the sequence of operations
+        from src.email_handler.outlook_client import OutlookClient
+        from src.document_processor.ocr_processor import OCRProcessor
+        from src.document_processor.excel_processor import ExcelProcessor
+        from src.services.data_integrator import DataIntegrator
+
+        # Fetch emails
+        outlook = OutlookClient()
+        emails = outlook.fetch_emails()
+
+        # Process documents (placeholders for actual processing)
+        textract_processor = TextractProcessor()
+        excel_processor = ExcelProcessor()
+        # You might iterate over emails and process attachments here
+
+        # For demonstration, assume we get some data:
+        excel_data = {}  # Replace with actual call to process an Excel file
+        ocr_data = {}    # Replace with actual OCR processing call
+
+        integrator = DataIntegrator(textract_processor, excel_processor)
+        final_data = integrator.combine_data(excel_data, ocr_data)
+
+        # Save final report (e.g., final_report.xlsx)
+        # Your code to generate and save the Excel file goes here
+        logging.info("Workflow executed and final report generated.")
 
     def _save_submission(self, email_id: str, document_paths: Dict, 
                         excel_path: Optional[str], output_path: str) -> str:
