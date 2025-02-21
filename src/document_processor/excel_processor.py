@@ -6,12 +6,10 @@ from datetime import datetime
 from openpyxl import load_workbook
 import re
 
-from src.utils.error_handling import ServiceError, handle_errors, ErrorCategory, ErrorSeverity
-
 logger = logging.getLogger(__name__)
 
-class ExcelProcessor:
-    """Processor for handling Excel files."""
+class EnhancedExcelProcessor:
+    """Enhanced processor for handling Excel files with multiple rows and proper date formatting."""
 
     def __init__(self):
         """Initialize Excel processor."""
@@ -51,8 +49,10 @@ class ExcelProcessor:
 
         # Default value for missing fields
         self.DEFAULT_VALUE = "."
-
-    @handle_errors(ErrorCategory.PROCESS, ErrorSeverity.MEDIUM)
+        
+        # Date format for standardization
+        self.DATE_FORMAT = '%d-%m-%Y'  # Changed to dd-mm-yyyy
+        
     def validate_template(self, file_path: str) -> Tuple[bool, List[str]]:
         """
         Validate Excel template against required fields.
@@ -76,21 +76,26 @@ class ExcelProcessor:
 
         except Exception as e:
             logger.error(f"Error validating Excel template: {str(e)}")
-            raise ServiceError(f"Excel template validation failed: {str(e)}")
+            raise Exception(f"Excel template validation failed: {str(e)}")
         
     def process_excel(self, file_path: str, dayfirst: bool = True) -> Tuple[pd.DataFrame, List[Dict]]:
         """
-        Process Excel file and validate data.
+        Process Excel file and validate data. Handles multiple rows.
         
         Args:
             file_path: Path to Excel file
+            dayfirst: Whether to parse dates with day first (European format)
             
         Returns:
             Tuple of (processed dataframe, list of validation errors)
         """
         try:
-            
             df = pd.read_excel(file_path)
+            
+            # If empty, return empty dataframe
+            if df.empty:
+                logger.warning("Excel file contains no data")
+                return df, [{"error": "Excel file contains no data"}]
             
             # Clean column names
             df.columns = [self._clean_column_name(col) for col in df.columns]
@@ -110,7 +115,7 @@ class ExcelProcessor:
 
         except Exception as e:
             logger.error(f"Error processing Excel file: {str(e)}")
-            raise ServiceError(f"Excel processing failed: {str(e)}")
+            raise Exception(f"Excel processing failed: {str(e)}")
 
     def _clean_column_name(self, column: str) -> str:
         """Clean and standardize column names."""
@@ -145,8 +150,9 @@ class ExcelProcessor:
                         'error': f'Invalid date format: {str(e)}'
                     })
             elif isinstance(validation, list):
-                invalid_mask = ~df[field].isin(validation)
-                invalid_values = df[field][invalid_mask].unique()
+                # Only check non-empty values
+                invalid_mask = ~df[field].isin(validation) & ~df[field].isin(['', '.', self.DEFAULT_VALUE])
+                invalid_values = df.loc[invalid_mask, field].unique()
                 if len(invalid_values) > 0:
                     errors.append({
                         'field': field,
@@ -157,13 +163,17 @@ class ExcelProcessor:
         return errors
 
     def _clean_data(self, df: pd.DataFrame, dayfirst: bool = True) -> pd.DataFrame:
-        """Clean and standardize data."""
+        """Clean and standardize data with improved date handling."""
         # Handle dates
         date_fields = [field for field, val_type in self.required_fields.items() 
                       if val_type == 'date' and field in df.columns]
+        
         for field in date_fields:
             try:
-                df[field] = pd.to_datetime(df[field], dayfirst=dayfirst).dt.strftime('%Y-%m-%d')
+                # Convert to datetime and then to the desired format
+                df[field] = pd.to_datetime(df[field], dayfirst=dayfirst).dt.strftime('%d-%m-%Y')
+                # Format to DD-MM-YYYY
+                df[field] = df[field].dt.strftime(self.DATE_FORMAT)
             except:
                 df[field] = self.DEFAULT_VALUE
 
@@ -199,3 +209,58 @@ class ExcelProcessor:
             number = '971' + number[1:]
             
         return f"+{number}"
+        
+    def populate_template(self, template_path: str, output_path: str, data: List[Dict]) -> Dict:
+        """
+        Populate an Excel template with multiple rows of data.
+        
+        Args:
+            template_path: Path to template Excel
+            output_path: Path to save populated Excel
+            data: List of dictionaries with data to populate
+            
+        Returns:
+            Dict with status and info
+        """
+        try:
+            if not os.path.exists(template_path):
+                raise FileNotFoundError(f"Template file not found: {template_path}")
+                
+            # Load template
+            template_wb = load_workbook(template_path)
+            template_ws = template_wb.active
+            
+            # Get header row with cleaned names
+            headers = [self._clean_column_name(cell.value or '') for cell in template_ws[1]]
+            
+            # Create mapping from clean names to column indices
+            header_map = {name: idx+1 for idx, name in enumerate(headers) if name}
+            
+            # Create new workbook for output
+            output_wb = load_workbook(template_path)
+            output_ws = output_wb.active
+            
+            # Populate data rows
+            for row_idx, row_data in enumerate(data, start=2):  # Start from second row
+                for field, value in row_data.items():
+                    clean_field = self._clean_column_name(field)
+                    if clean_field in header_map:
+                        col_idx = header_map[clean_field]
+                        output_ws.cell(row=row_idx, column=col_idx, value=value)
+            
+            # Save output
+            output_wb.save(output_path)
+            
+            return {
+                "status": "success",
+                "template": template_path,
+                "output": output_path,
+                "rows_processed": len(data)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error populating template: {str(e)}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }

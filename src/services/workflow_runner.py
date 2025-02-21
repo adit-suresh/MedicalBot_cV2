@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 from datetime import datetime
+import re
 from typing import Dict, Optional
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -140,17 +141,38 @@ class WorkflowRunner:
                 "error": str(e)
             }
 
-    def _determine_file_type(self, file_path: str) -> str:
-        """Determine file type from filename."""
+    def _determine_file_type(self, file_path: str, content_text: Optional[str] = None) -> str:
+        """Determine file type from both filename and content when available."""
         name = file_path.lower()
+        
+        # First check file extension
         if name.endswith(('.xlsx', '.xls')):
             return 'excel'
-        elif 'passport' in name:
+            
+        # If we have OCR text, use it for better classification
+        if content_text:
+            content_lower = content_text.lower()
+            
+            # Passport indicators
+            if any(term in content_lower for term in ['passport no', 'surname', 'given names', 'nationality', 'date of birth', 'place of issue']):
+                return 'passport'
+                
+            # Emirates ID indicators
+            if any(term in content_lower for term in ['emirates id', 'id number', 'united arab emirates', 'id card']) or re.search(r'\d{3}-\d{4}-\d{7}-\d{1}', content_text):
+                return 'emirates_id'
+                
+            # Visa indicators
+            if any(term in content_lower for term in ['visa', 'permit no', 'entry permit', 'sponsor']):
+                return 'visa'
+        
+        # Fallback to filename-based classification
+        if 'passport' in name:
             return 'passport'
-        elif 'emirates' in name or 'eid' in name:
+        elif 'emirates' in name or 'eid' in name or 'id card' in name:
             return 'emirates_id'
-        elif 'visa' in name:
+        elif 'visa' in name or 'permit' in name or 'residence' in name:
             return 'visa'
+            
         return 'unknown'
     
     def run(self):

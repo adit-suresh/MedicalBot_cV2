@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # test_complete_workflow.py
 
 import os
@@ -7,23 +8,23 @@ import pandas as pd
 import re
 from datetime import datetime
 from typing import Dict, Optional, List
+import argparse
 
 # Add project root to Python path
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(project_root)
 
+# Import original components
 from src.email_handler.outlook_client import OutlookClient
 from src.email_handler.attachment_handler import AttachmentHandler
 from src.document_processor.textract_processor import TextractProcessor
-from src.document_processor.excel_processor import ExcelProcessor
-from src.services.data_combiner import DataCombiner
+
+# Import original workflow components
 from src.utils.process_tracker import ProcessTracker
+from src.services.data_combiner import DataCombiner
+from src.document_processor.excel_processor import EnhancedExcelProcessor as ExcelProcessor
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, 
-                   format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
+# Create WorkflowTester class from the original file
 class CompletedSubmission:
     def __init__(self, process_id: str, documents: Dict[str, str], final_excel: str):
         self.process_id = process_id
@@ -47,6 +48,23 @@ class WorkflowTester:
         
         # Create necessary directories
         os.makedirs("processed_submissions", exist_ok=True)
+        
+    def is_email_processed(self, email_id: str) -> bool:
+        """Check if email has already been processed."""
+        tracking_file = "processed_emails.txt"
+        if not os.path.exists(tracking_file):
+            return False
+            
+        with open(tracking_file, 'r') as f:
+            processed_ids = f.read().splitlines()
+            
+        return email_id in processed_ids
+    
+    def mark_email_processed(self, email_id: str) -> None:
+        """Mark email as processed."""
+        tracking_file = "processed_emails.txt"
+        with open(tracking_file, 'a') as f:
+            f.write(f"{email_id}\n")
 
     def run_complete_workflow(self) -> Dict:
         """Run complete workflow from email to final Excel."""
@@ -58,8 +76,18 @@ class WorkflowTester:
             results = []
             for email in emails:
                 try:
+                    # Check if email was already processed
+                    if self.is_email_processed(email['id']):
+                        logger.info(f"Email {email['id']} already processed, skipping.")
+                        continue
+                        
                     result = self._process_single_email(email)
                     results.append(result)
+                    
+                    # If processing was successful, mark as processed
+                    if result['status'] == 'success':
+                        self.mark_email_processed(email['id'])
+                        
                 except Exception as e:
                     logger.error(f"Error processing email {email['id']}: {str(e)}")
                     continue
@@ -116,7 +144,17 @@ class WorkflowTester:
                 logger.info("Processing Excel data...")
                 df, errors = self.excel_processor.process_excel(excel_path, dayfirst=True)
                 if not df.empty:
-                    excel_data = df.iloc[0].to_dict()
+                    # Process all rows, not just the first one
+                    excel_rows = []
+                    for _, row in df.iterrows():
+                        excel_rows.append(row.to_dict())
+                    
+                    # Use first row for backward compatibility with existing code
+                    excel_data = excel_rows[0]
+                    
+                    # Log the number of rows found
+                    logger.info(f"Found {len(excel_rows)} rows in Excel file")
+                    
                     if errors:
                         logger.warning(f"Excel validation errors: {errors}")
 
@@ -218,7 +256,9 @@ class WorkflowTester:
                     date_val = str(first_row.get(field, ''))
                     if date_val not in ['.', 'nan', '']:
                         try:
-                            datetime.strptime(date_val, '%Y-%m-%d')
+                            # Check if date is in DD-MM-YYYY format
+                            if not re.match(r'^\d{2}-\d{2}-\d{4}$', date_val):
+                                issues.append(f"Invalid date format in {field}: {date_val}")
                         except ValueError:
                             issues.append(f"Invalid date format in {field}")
 
@@ -234,26 +274,57 @@ class WorkflowTester:
             }
 
     def _determine_file_type(self, file_path: str) -> str:
-        """Determine file type from filename."""
+        """Determine file type from filename and content if possible."""
         name = file_path.lower()
+        
+        # First check extensions for common file types
         if name.endswith(('.xlsx', '.xls')):
             return 'excel'
-        elif 'passport' in name:
+            
+        # If content-based detection is available, use it here
+        # For now, fallback to filename-based classification with improvements
+        if 'passport' in name:
             return 'passport'
-        elif 'emirates' in name or 'eid' in name:
+        elif 'emirates' in name or 'eid' in name or 'id card' in name:
             return 'emirates_id'
-        elif 'visa' in name:
+        elif 'visa' in name or 'permit' in name or 'residence' in name:
             return 'visa'
+            
+        # Try additional checks for content if unable to determine from filename
+        # For example, check file size, basic content patterns, etc.
+        
         return 'unknown'
-
+    
     def get_completed_submissions(self) -> List[CompletedSubmission]:
         """Get list of completed submissions."""
         return self.completed_submissions
 
-if __name__ == "__main__":
-    # Run complete workflow test
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(levelname)s - %(name)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+def print_separator():
+    """Print a separator line for better readability."""
+    logger.info("=" * 80)
+
+def run_test():
+    """Run the workflow test."""
+    print_separator()
+    logger.info("STARTING WORKFLOW TEST")
+    print_separator()
+    
+    # Initialize workflow tester
     tester = WorkflowTester()
+    
+    # Run workflow
     result = tester.run_complete_workflow()
+    
+    # Print results
+    print_separator()
+    logger.info("WORKFLOW TEST COMPLETED")
     
     if result['status'] == 'success':
         logger.info(f"Successfully processed {result['successful']} out of {result['emails_processed']} emails")
@@ -268,3 +339,152 @@ if __name__ == "__main__":
             logger.info(f"Final Excel: {sub.final_excel}")
     else:
         logger.error(f"Workflow failed: {result.get('error')}")
+
+def validate_excel_file(file_path: str) -> Dict:
+    """
+    Validate an output Excel file.
+    
+    Args:
+        file_path: Path to Excel file
+        
+    Returns:
+        Validation result dictionary
+    """
+    try:
+        logger.info(f"Validating {file_path}")
+        df = pd.read_excel(file_path)
+        
+        if df.empty:
+            return {
+                'file': os.path.basename(file_path),
+                'is_valid': False,
+                'row_count': 0,
+                'issues': ["File is empty"]
+            }
+            
+        issues = []
+        
+        # Check required columns
+        required_fields = [
+            'first_name', 'last_name', 'nationality', 
+            'passport_no', 'dob', 'gender'
+        ]
+        
+        missing_columns = [field for field in required_fields if field not in df.columns]
+        if missing_columns:
+            issues.append(f"Missing required columns: {', '.join(missing_columns)}")
+            
+        # Check for empty values in required fields
+        for field in [f for f in required_fields if f in df.columns]:
+            empty_rows = df[df[field].isin(['', '.', 'nan'])].index.tolist()
+            if empty_rows:
+                if len(empty_rows) <= 3:  # Show only first few for readability
+                    issues.append(f"Empty values in {field} at rows: {[i+2 for i in empty_rows]}")  # +2 for Excel row numbers (header + 1-indexing)
+                else:
+                    issues.append(f"Empty values in {field} at {len(empty_rows)} rows")
+                    
+        # Validate date formats
+        date_fields = ['dob', 'passport_expiry_date', 'visa_expiry_date']
+        for field in [f for f in date_fields if f in df.columns]:
+            # Check if dates are in DD-MM-YYYY format
+            invalid_format = []
+            for idx, val in enumerate(df[field]):
+                if pd.notna(val) and val not in ['.', '']:
+                    if not re.match(r'^\d{2}-\d{2}-\d{4}$', str(val)):
+                        invalid_format.append(idx)
+                        
+            if invalid_format:
+                if len(invalid_format) <= 3:
+                    issues.append(f"Invalid date format in {field} at rows: {[i+2 for i in invalid_format]}")
+                else:
+                    issues.append(f"Invalid date format in {field} at {len(invalid_format)} rows")
+        
+        # Check Emirates ID format if present
+        if 'emirates_id' in df.columns:
+            invalid_eid = []
+            for idx, val in enumerate(df['emirates_id']):
+                if pd.notna(val) and val not in ['.', '']:
+                    if not re.match(r'^\d{3}-\d{4}-\d{7}-\d{1}$', str(val)):
+                        invalid_eid.append(idx)
+                        
+            if invalid_eid:
+                if len(invalid_eid) <= 3:
+                    issues.append(f"Invalid Emirates ID format at rows: {[i+2 for i in invalid_eid]}")
+                else:
+                    issues.append(f"Invalid Emirates ID format at {len(invalid_eid)} rows")
+                    
+        return {
+            'file': os.path.basename(file_path),
+            'is_valid': len(issues) == 0,
+            'row_count': len(df),
+            'issues': issues
+        }
+    
+    except Exception as e:
+        logger.error(f"Error validating {file_path}: {str(e)}")
+        return {
+            'file': os.path.basename(file_path),
+            'is_valid': False,
+            'row_count': 0,
+            'issues': [f"Validation error: {str(e)}"]
+        }
+
+def run_validation(output_dir: str):
+    """
+    Validate output files in a directory.
+    
+    Args:
+        output_dir: Directory containing output files
+    """
+    print_separator()
+    logger.info(f"VALIDATING OUTPUT FILES IN {output_dir}")
+    print_separator()
+    
+    if not os.path.exists(output_dir):
+        logger.error(f"Output directory does not exist: {output_dir}")
+        return False
+        
+    # Find all Excel files in output directory and subdirectories
+    excel_files = []
+    for root, _, files in os.walk(output_dir):
+        for file in files:
+            if file.endswith(('.xlsx', '.xls')) and 'template' not in file.lower():
+                excel_files.append(os.path.join(root, file))
+                
+    if not excel_files:
+        logger.warning("No output Excel files found")
+        return False
+        
+    logger.info(f"Found {len(excel_files)} output Excel files")
+    
+    # Validate each Excel file
+    validation_results = []
+    for excel_file in excel_files:
+        result = validate_excel_file(excel_file)
+        validation_results.append(result)
+        
+    # Print summary
+    valid_count = sum(1 for r in validation_results if r['is_valid'])
+    logger.info(f"Validation results: {valid_count}/{len(validation_results)} files are valid")
+    
+    for idx, result in enumerate(validation_results, 1):
+        logger.info(f"File {idx}: {result['file']}")
+        if result['is_valid']:
+            logger.info(f"  Valid: Yes - {result['row_count']} rows")
+        else:
+            logger.info(f"  Valid: No - {len(result['issues'])} issues")
+            for issue in result['issues']:
+                logger.warning(f"  - {issue}")
+                
+    return valid_count == len(validation_results)
+
+if __name__ == "__main__":
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Test complete workflow')
+    parser.add_argument('--validate', metavar='DIR', help='Validate output files in directory')
+    args = parser.parse_args()
+    
+    if args.validate:
+        run_validation(args.validate)
+    else:
+        run_test()
