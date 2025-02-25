@@ -19,6 +19,8 @@ sys.path.append(project_root)
 from src.email_handler.outlook_client import OutlookClient
 from src.email_handler.attachment_handler import AttachmentHandler
 from src.document_processor.textract_processor import TextractProcessor
+from src.document_processor.deepseek_processor import DeepseekProcessor
+from src.services.enhanced_document_processor import EnhancedDocumentProcessorService
 
 # Import original workflow components
 from src.utils.process_tracker import ProcessTracker
@@ -40,6 +42,9 @@ class WorkflowTester:
         self.outlook = OutlookClient()
         self.attachment_handler = AttachmentHandler()
         self.textract = TextractProcessor()
+        self.deepseek = DeepseekProcessor() if os.getenv('DEEPSEEK_API_KEY') else None
+        self.document_processor = EnhancedDocumentProcessorService(self.textract, self.deepseek)
+        
         self.excel_processor = ExcelProcessor()
         self.data_combiner = DataCombiner(self.textract, self.excel_processor)
         self.process_tracker = ProcessTracker()
@@ -152,7 +157,7 @@ class WorkflowTester:
             extracted_data = {}
             for doc_type, file_path in document_paths.items():
                 try:
-                    data = self.textract.process_document(file_path, doc_type)
+                    data = self.document_processor.process_document(file_path, doc_type)
                     logger.info(f"Extracted data from {doc_type}: {list(data.keys())}")
                     extracted_data.update(data)
                 except Exception as e:

@@ -11,6 +11,11 @@ TENANT_ID = os.getenv("TENANT_ID")
 USER_EMAIL = os.getenv("USER_EMAIL")
 TARGET_MAILBOX = os.getenv("TARGET_MAILBOX")  
 
+
+DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY', '')
+DEEPSEEK_API_URL = os.getenv('DEEPSEEK_API_URL', 'https://api.deepseek.com/v1/vision')
+USE_DEEPSEEK_FALLBACK = os.getenv('USE_DEEPSEEK_FALLBACK', 'True').lower() == 'true'
+
 # Email settings
 ATTACHMENT_TYPES = [".pdf", ".xlsx", ".xls", ".jpg", ".jpeg", ".png"]
 MAX_EMAIL_FETCH = 50  # Maximum number of emails to fetch in one go
