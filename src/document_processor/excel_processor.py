@@ -165,17 +165,17 @@ class EnhancedExcelProcessor:
     def _clean_data(self, df: pd.DataFrame, dayfirst: bool = True) -> pd.DataFrame:
         """Clean and standardize data with improved date handling."""
         # Handle dates
-        date_fields = [field for field, val_type in self.required_fields.items() 
-                      if val_type == 'date' and field in df.columns]
+        date_fields = ['dob', 'effective_date', 'date_of_birth']
         
         for field in date_fields:
-            try:
-                # Convert to datetime and then to the desired format
-                df[field] = pd.to_datetime(df[field], dayfirst=dayfirst).dt.strftime('%d-%m-%Y')
-                # Format to DD-MM-YYYY
-                df[field] = df[field].dt.strftime(self.DATE_FORMAT)
-            except:
-                df[field] = self.DEFAULT_VALUE
+            if field in df.columns:
+                try:
+                    # Convert to datetime and then to the desired format
+                    df[field] = pd.to_datetime(df[field], dayfirst=dayfirst).dt.strftime('%d-%m-%Y')
+                    # Format to DD-MM-YYYY
+                    df[field] = df[field].dt.strftime(self.DATE_FORMAT)
+                except:
+                    df[field] = self.DEFAULT_VALUE
 
         # Clean string fields
         string_fields = [field for field, val_type in self.required_fields.items() 
@@ -264,3 +264,41 @@ class EnhancedExcelProcessor:
                 "status": "error",
                 "error": str(e)
             }
+        
+        
+    def _process_date_field(self, df: pd.DataFrame, field: str) -> pd.DataFrame:
+        """Process date field ensuring DD/MM/YYYY format."""
+        try:
+            if field in df.columns:
+                # Convert to datetime with dayfirst=True
+                df[field] = pd.to_datetime(df[field], dayfirst=True)
+                # Format as DD/MM/YYYY
+                df[field] = df[field].dt.strftime('%d/%m/%Y')
+        except Exception as e:
+            logger.error(f"Error processing date field {field}: {e}")
+        return df
+
+    def process_excel(self, file_path: str, dayfirst: bool = True) -> Tuple[pd.DataFrame, List[Dict]]:
+        """Process Excel file with proper date handling."""
+        try:
+            df = pd.read_excel(file_path)
+            if df.empty:
+                return df, []
+                
+            # Handle date fields properly
+            date_fields = ['DOB', 'Effective Date', 'dob', 'effective_date', 
+                        'Passport Expiry Date', 'Visa Expiry Date']
+            
+            for field in date_fields:
+                df = self._process_date_field(df, field)
+            
+            # Initialize errors list
+            errors = []
+            
+            # Rest of your existing processing code...
+            
+            return df, errors
+            
+        except Exception as e:
+            logger.error(f"Error processing Excel file: {str(e)}")
+            raise Exception(f"Excel processing failed: {str(e)}")

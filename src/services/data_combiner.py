@@ -43,9 +43,17 @@ class DataCombiner:
         """Initialize comprehensive field mapping dictionary."""
         return {
             # Personal identification fields
-            'passport_no': ['passport_number', 'passport', 'passport_no', 'passportnumber'],
+            'passport_no': {
+                'priority': ['passport_number', 'passport_no', 'passport'],
+                'format': r'^[A-Z0-9]{6,12}$',
+                'clean': lambda x: str(x).upper().strip()
+                },
             'passport_number': ['passport_no', 'passport', 'passportnumber'],
-            'emirates_id': ['eid', 'emiratesid', 'emirates_id_number', 'id_number', 'uae_id'],
+            'emirates_id': {
+                'priority': ['emirates_id', 'eid', 'id_number'],
+                'format': r'^\d{3}-\d{4}-\d{7}-\d{1}$',
+                'clean': lambda x: re.sub(r'[^0-9-]', '', str(x))
+                },
             'eid': ['emirates_id', 'emirates_id_number', 'id_number', 'uae_id'],
             'unified_no': ['unified_number', 'unified', 'entry_permit_no', 'visa_number'],
             'entry_permit_no': ['visa_number', 'visa_file_number', 'permit_number', 'unified_no'],
@@ -56,7 +64,7 @@ class DataCombiner:
             'last_name': ['lastname', 'lname', 'surname', 'name_last', 'family_name', 'last'],
             'full_name': ['name', 'complete_name', 'person_name', 'customer_name'],
             'gender': ['sex', 'gender_type'],
-            'dob': ['date_of_birth', 'birth_date', 'birthdate', 'birth_day'],
+            'dob': ['date_of_birth', 'birth_date', 'birthdate', 'birth_day', 'DOB', 'DateOfBirth'],
             'date_of_birth': ['dob', 'birth_date', 'birthdate', 'birth_day'],
             'nationality': ['nation', 'citizenship', 'country', 'country_of_birth'],
             'mobile_no': ['phone', 'phone_number', 'mobile', 'contact_number', 'cell'],
@@ -74,7 +82,7 @@ class DataCombiner:
             'plan_type': ['policy_type', 'coverage_type', 'plan', 'insurance_type'],
             'member_type': ['relationship', 'relation', 'dependent_type', 'role'],
             'staff_id': ['employee_id', 'employee_no', 'staff_number', 'worker_id'],
-            'effective_date': ['start_date', 'coverage_start', 'policy_start', 'begin_date'],
+            'effective_date': ['start_date', 'coverage_start', 'policy_start', 'begin_date', 'effective_date', 'EffectiveDate'],
             'marital_status': ['marriage_status', 'civil_status'],
             'premium': ['insurance_premium', 'cost', 'annual_premium'],
             'coverage_amount': ['sum_insured', 'benefit_amount', 'coverage', 'insured_amount'],
@@ -98,71 +106,59 @@ class DataCombiner:
 
     @handle_errors(ErrorCategory.PROCESS, ErrorSeverity.MEDIUM)
     def combine_and_populate_template(self, template_path: str, output_path: str, 
-                                    extracted_data: Dict, excel_data: Optional[pd.DataFrame] = None) -> Dict:
-        """
-        Combine data from all sources and populate template with performance optimizations.
-        
-        Args:
-            template_path: Path to Excel template
-            output_path: Path to save output
-            extracted_data: Data extracted from documents
-            excel_data: DataFrame from original Excel
-            
-        Returns:
-            Dict: Result dictionary with status and details
-            
-        Raises:
-            ServiceError: If data combination fails
-        """
+                                    extracted_data: Dict, excel_data: Any = None) -> Dict:
+        """Combine data with better handling of multiple rows."""
         start_time = time.time()
         try:
-            # Validate inputs
+            # Validate template
             if not os.path.exists(template_path):
                 raise FileNotFoundError(f"Template file not found: {template_path}")
                 
-            # Use cached template structure if available
+            # Get template structure
             template_info = self._get_template_structure(template_path)
             template_columns = template_info['columns']
             
-            # Track field mapping for debugging
+            # Initialize field mappings
             field_mappings = {}
             
-            # Process data based on excel_data type
+            # Convert excel_data to DataFrame if needed
             if excel_data is not None:
-                # Handle both DataFrame and dict inputs
                 if isinstance(excel_data, dict):
                     excel_data = pd.DataFrame([excel_data])
+                elif isinstance(excel_data, list):
+                    excel_data = pd.DataFrame(excel_data)
                 elif not isinstance(excel_data, pd.DataFrame):
-                    raise TypeError(f"Excel data must be DataFrame or dict, got {type(excel_data)}")
-                    
-                if excel_data.empty:
-                    logger.warning("Excel data is empty, using document data only")
-                    result_df = self._process_single_row(extracted_data, template_columns, field_mappings)
-                else:
-                    logger.info(f"Processing multiple rows ({len(excel_data)}) with document data")
-                    result_df = self._process_multiple_rows(extracted_data, excel_data, template_columns, field_mappings)
+                    raise TypeError(f"Excel data must be DataFrame, dict, or list")
+            
+            # Process data
+            if excel_data is not None and not excel_data.empty:
+                logger.info(f"Processing {len(excel_data)} rows with document data")
+                result_df = self._process_multiple_rows(extracted_data, excel_data, 
+                                                    template_columns, field_mappings)
             else:
-                logger.info("No Excel data provided, using document data only")
-                result_df = self._process_single_row(extracted_data, template_columns, field_mappings)
-            
-            # Clean and standardize final data
-            result_df = self._clean_final_dataframe(result_df)
-            
-            # Save to output file
+                logger.info("Using document data only")
+                result_df = self._process_single_row(extracted_data, template_columns, 
+                                                field_mappings)
+                
+            # Save results
             output_dir = os.path.dirname(output_path)
             if output_dir:
                 os.makedirs(output_dir, exist_ok=True)
                 
+            # Final cleanup of date formats
+            date_fields = ['effective_date', 'dob', 'passport_expiry_date', 'visa_expiry_date']
+            for field in date_fields:
+                if field in result_df.columns:
+                    result_df[field] = result_df[field].apply(
+                        lambda x: self._format_date_value(x) if pd.notna(x) else self.DEFAULT_VALUE
+                    )
+            
+            # Save to Excel
             result_df.to_excel(output_path, index=False)
             
             processing_time = time.time() - start_time
             logger.info(f"Data combined successfully in {processing_time:.2f}s: "
-                       f"{len(result_df)} rows, {len(template_columns)} columns")
-            
-            # Log field mapping summary for debugging
-            if logger.isEnabledFor(logging.DEBUG):
-                for dest_field, source_field in field_mappings.items():
-                    logger.debug(f"Mapped '{source_field}' to template field '{dest_field}'")
+                    f"{len(result_df)} rows, {len(template_columns)} columns")
             
             return {
                 'status': 'success',
@@ -171,7 +167,7 @@ class DataCombiner:
                 'processing_time': processing_time,
                 'field_mappings': field_mappings
             }
-
+            
         except Exception as e:
             logger.error(f"Error combining data: {str(e)}")
             raise ServiceError(f"Data combination failed: {str(e)}")
@@ -274,49 +270,79 @@ class DataCombiner:
         return cleaned
 
     def _clean_excel_data(self, data: Dict) -> Dict:
-        """Clean Excel data with better handling of special values."""
+        """Clean Excel data with better handling of special values and dates."""
         cleaned = {}
+        date_fields = ['effective_date', 'dob', 'passport_expiry_date', 'visa_expiry_date']
+        
         for key, value in data.items():
             # Normalize key
             normalized_key = self._normalize_field_name(key)
             
+            # Skip unnamed columns
+            if normalized_key.startswith('unnamed'):
+                continue
+                
             # Handle different value types
             if pd.isna(value) or value == '' or str(value).lower() == 'nan':
                 cleaned[normalized_key] = self.DEFAULT_VALUE
             elif isinstance(value, (int, float)):
-                if normalized_key in self._date_fields and isinstance(value, float):
+                if normalized_key in date_fields and isinstance(value, float):
                     # Convert Excel date number to date string
                     cleaned[normalized_key] = self._format_excel_date(value)
                 elif np.isclose(value, int(value)):
-                    # Convert whole numbers without decimal point
                     cleaned[normalized_key] = str(int(value))
                 else:
                     cleaned[normalized_key] = str(value)
             elif isinstance(value, datetime):
-                # Format datetime objects
-                cleaned[normalized_key] = value.strftime('%Y-%m-%d')
+                if normalized_key in date_fields:
+                    cleaned[normalized_key] = value.strftime('%d/%m/%Y')
+                else:
+                    cleaned[normalized_key] = value.strftime('%Y-%m-%d')
             else:
-                # Clean up string values
                 str_value = str(value).strip()
                 
-                # Apply field-specific formatting
-                if normalized_key in self._date_fields:
-                    cleaned[normalized_key] = self._format_date_value(str_value)
-                elif normalized_key in self._numeric_fields:
-                    cleaned[normalized_key] = self._format_numeric_value(str_value)
+                # Handle date fields specially
+                if normalized_key in date_fields:
+                    try:
+                        # Try to parse as date
+                        date_obj = pd.to_datetime(str_value, dayfirst=True)
+                        cleaned[normalized_key] = date_obj.strftime('%d/%m/%Y')
+                    except:
+                        cleaned[normalized_key] = str_value
                 else:
                     cleaned[normalized_key] = str_value
                     
         return cleaned
+    
+    def _format_emirates_id(self, eid: str) -> str:
+        """Format Emirates ID to include hyphens in correct positions."""
+        if not eid or eid == self.DEFAULT_VALUE:
+            return self.DEFAULT_VALUE
+            
+        # Remove any existing hyphens or spaces
+        digits = re.sub(r'[^0-9]', '', str(eid))
+        
+        # Check if we have the correct number of digits
+        if len(digits) == 15:
+            # Format as XXX-XXXX-XXXXXXX-X
+            return f"{digits[:3]}-{digits[3:7]}-{digits[7:14]}-{digits[14]}"
+        
+        return eid
+
 
     def _combine_row_data(self, extracted: Dict, excel: Dict) -> Dict:
         """Combine data with improved priority rules and field mapping."""
         # Start with a deep copy of Excel data to avoid modification
         combined = copy.deepcopy(excel)
         
+        # First, format Emirates ID in Excel data if present
+        if 'emirates_id' in combined and combined['emirates_id'] != self.DEFAULT_VALUE:
+            combined['emirates_id'] = self._format_emirates_id(combined['emirates_id'])
+        
         # Identify special fields that require custom handling
         name_fields = ['first_name', 'middle_name', 'last_name', 'full_name']
         id_fields = ['passport_number', 'emirates_id', 'entry_permit_no', 'unified_no']
+        date_fields = ['dob', 'date_of_birth', 'effective_date', 'passport_expiry_date', 'visa_expiry_date']
         
         # Field mapping for extracted data
         field_map = {
@@ -338,6 +364,11 @@ class DataCombiner:
         # Track overridden fields
         overridden = []
         
+        # First, handle date fields from Excel data to ensure proper format
+        for field in date_fields:
+            if field in combined and combined[field] not in [self.DEFAULT_VALUE, '', None, 'nan']:
+                combined[field] = self._format_date_value(combined[field])
+        
         # Process special name fields
         if 'full_name' in extracted and extracted['full_name'] != self.DEFAULT_VALUE:
             self._split_full_name(extracted['full_name'], combined)
@@ -352,23 +383,32 @@ class DataCombiner:
             # Skip default values and already processed name fields
             if value == self.DEFAULT_VALUE or ext_key in ['full_name', 'given_names', 'surname']:
                 continue
+            
+            # Format date values from extracted data
+            if ext_key in date_fields:
+                value = self._format_date_value(value)
                 
             # Use field mapping to find matching fields in combined data
             target_keys = field_map.get(ext_key, [ext_key])
             for target_key in target_keys:
-                if target_key in combined and combined[target_key] == self.DEFAULT_VALUE:
-                    combined[target_key] = value
-                    overridden.append(target_key)
-                    break
+                # Don't override non-empty Excel data except for ID fields
+                if target_key in combined:
+                    if combined[target_key] == self.DEFAULT_VALUE or target_key in id_fields:
+                        combined[target_key] = value
+                        overridden.append(target_key)
+                        break
         
-        # Priority check for ID fields - prefer OCR data for these fields
+        # Priority check for ID fields - but preserve Excel data if extracted is empty
         for id_field in id_fields:
             if id_field in extracted and extracted[id_field] != self.DEFAULT_VALUE:
-                # Use OCR data for ID fields regardless of Excel data
-                combined[id_field] = extracted[id_field]
-        
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"Overridden fields from OCR data: {overridden}")
+                value = extracted[id_field]
+                if id_field == 'emirates_id':
+                    value = self._format_emirates_id(value)
+                
+                # Only use OCR data if Excel data is empty or if it's a passport/visa number
+                if (id_field in combined and combined[id_field] == self.DEFAULT_VALUE) or \
+                (id_field not in ['emirates_id']):  # Don't override Emirates ID from Excel
+                    combined[id_field] = value
             
         return combined
 
@@ -516,51 +556,51 @@ class DataCombiner:
         return normalized.strip('_')
 
     def _format_excel_date(self, excel_date: float) -> str:
-        """Convert Excel date number to YYYY-MM-DD format."""
+        """Convert Excel date number to DD-MM-YYYY format."""
         try:
             # Excel dates are days since 1900-01-01 (or 1904-01-01 on Mac)
             # Adjust based on the epoch
             date_value = datetime(1899, 12, 30) + timedelta(days=excel_date)
-            return date_value.strftime('%Y-%m-%d')
+            return date_value.strftime('%d-%m-%Y')
         except Exception:
             return str(excel_date)
 
     def _format_date_value(self, date_str: str) -> str:
-        """Format date string to YYYY-MM-DD standard format."""
-        if date_str == self.DEFAULT_VALUE:
-            return date_str
+            """Format date string to DD-MM-YYYY format."""
+            if date_str == self.DEFAULT_VALUE:
+                return date_str
+                
+            # Skip empty values
+            if not date_str or date_str.strip() == '':
+                return self.DEFAULT_VALUE
+                
+            # Try different date formats
+            date_formats = [
+                ('%Y-%m-%d', r'^\d{4}-\d{1,2}-\d{1,2}'),  # ISO format
+                ('%d/%m/%Y', r'^\d{1,2}/\d{1,2}/\d{4}'),  # DD/MM/YYYY
+                ('%m/%d/%Y', r'^\d{1,2}/\d{1,2}/\d{4}'),  # MM/DD/YYYY
+                ('%d-%m-%Y', r'^\d{1,2}-\d{1,2}-\d{4}'),  # DD-MM-YYYY
+                ('%Y/%m/%d', r'^\d{4}/\d{1,2}/\d{1,2}'),  # YYYY/MM/DD
+                ('%d.%m.%Y', r'^\d{1,2}\.\d{1,2}\.\d{4}'),  # DD.MM.YYYY
+                ('%d %b %Y', r'^\d{1,2} [A-Za-z]{3} \d{4}'),  # DD MMM YYYY
+                ('%B %d, %Y', r'^[A-Za-z]+ \d{1,2}, \d{4}'),  # Month DD, YYYY
+            ]
+                
+            for fmt, pattern in date_formats:
+                if re.match(pattern, date_str):
+                    try:
+                        date_obj = datetime.strptime(str(date_str).strip(), fmt)
+                        return date_obj.strftime('%d-%m-%Y')  # Changed to DD-MM-YYYY
+                    except ValueError:
+                        continue
             
-        # Skip empty values
-        if not date_str or date_str.strip() == '':
-            return self.DEFAULT_VALUE
-            
-        # Try different date formats
-        date_formats = [
-            ('%Y-%m-%d', r'^\d{4}-\d{1,2}-\d{1,2}'),  # ISO format
-            ('%d/%m/%Y', r'^\d{1,2}/\d{1,2}/\d{4}'),  # DD/MM/YYYY
-            ('%m/%d/%Y', r'^\d{1,2}/\d{1,2}/\d{4}'),  # MM/DD/YYYY
-            ('%d-%m-%Y', r'^\d{1,2}-\d{1,2}-\d{4}'),  # DD-MM-YYYY
-            ('%Y/%m/%d', r'^\d{4}/\d{1,2}/\d{1,2}'),  # YYYY/MM/DD
-            ('%d.%m.%Y', r'^\d{1,2}\.\d{1,2}\.\d{4}'),  # DD.MM.YYYY
-            ('%d %b %Y', r'^\d{1,2} [A-Za-z]{3} \d{4}'),  # DD MMM YYYY
-            ('%B %d, %Y', r'^[A-Za-z]+ \d{1,2}, \d{4}'),  # Month DD, YYYY
-        ]
-            
-        for fmt, pattern in date_formats:
-            if re.match(pattern, date_str):
-                try:
-                    date_obj = datetime.strptime(date_str, fmt)
-                    return date_obj.strftime('%Y-%m-%d')
-                except ValueError:
-                    continue
-        
-        # If no format worked, try pandas to_datetime
-        try:
-            date_obj = pd.to_datetime(date_str)
-            return date_obj.strftime('%Y-%m-%d')
-        except:
-            # If all parsing attempts fail, return original
-            return date_str
+            # If no format worked, try pandas to_datetime
+            try:
+                date_obj = pd.to_datetime(date_str, dayfirst=True)
+                return date_obj.strftime('%d-%m-%Y')  # Changed to DD-MM-YYYY
+            except:
+                # If all parsing attempts fail, return original
+                return date_str
 
     def _format_numeric_value(self, value: str) -> str:
         """Format numeric values consistently."""

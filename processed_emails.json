@@ -1,0 +1,47 @@
+{
+  "AAMkAGUxNWQ4NDNhLTY4NzMtNGFiOC1hODQ2LTk0MTNiYmQ3ZmQ3OABGAAAAAACi2t7vda3UQouVjb2g8onXBwAFHuf9bWY8R6g9FjxfvqBAAAAAAAEMAAAFHuf9bWY8R6g9FjxfvqBAAAAP1E9fAAA=": {
+    "timestamp": "2025-02-24T16:15:18.954726",
+    "metadata": {
+      "process_id": "Fw Addition - Nas - Salama Basic Insurance - Addition 18 Mail 01_20250224_161505",
+      "submission_dir": "processed_submissions\\Fw Addition - Nas - Salama Basic Insurance - Addition 18 Mail 01_20250224_161505",
+      "processed_at": "2025-02-24T16:15:18.954726",
+      "subject": "Fw: Addition - Nas - Salama Basic Insurance - Addition 18 Mail 01",
+      "received_time": "2025-02-24T06:30:04Z",
+      "has_attachments": true,
+      "documents_processed": [
+        "unknown"
+      ]
+    }
+  },
+  "AAMkAGUxNWQ4NDNhLTY4NzMtNGFiOC1hODQ2LTk0MTNiYmQ3ZmQ3OABGAAAAAACi2t7vda3UQouVjb2g8onXBwAFHuf9bWY8R6g9FjxfvqBAAAAAAAEMAAAFHuf9bWY8R6g9FjxfvqBAAAAP1E9dAAA=": {
+    "timestamp": "2025-02-24T16:15:25.021548",
+    "metadata": {
+      "process_id": "Fw Addition - Nas - Salama Basic Insurance - Addition 20_20250224_161518",
+      "submission_dir": "processed_submissions\\Fw Addition - Nas - Salama Basic Insurance - Addition 20_20250224_161518",
+      "processed_at": "2025-02-24T16:15:25.021548",
+      "subject": "Fw: Addition - Nas - Salama Basic Insurance - Addition 20",
+      "received_time": "2025-02-24T06:29:40Z",
+      "has_attachments": true,
+      "documents_processed": [
+        "unknown"
+      ]
+    }
+  },
+  "AAMkAGUxNWQ4NDNhLTY4NzMtNGFiOC1hODQ2LTk0MTNiYmQ3ZmQ3OABGAAAAAACi2t7vda3UQouVjb2g8onXBwAFHuf9bWY8R6g9FjxfvqBAAAAAAAEMAAAFHuf9bWY8R6g9FjxfvqBAAAAP1E9cAAA=": {
+    "timestamp": "2025-02-24T16:16:06.126646",
+    "metadata": {
+      "process_id": "Fw Addition - Farnek -Auh - 21022025_20250224_161525",
+      "submission_dir": "processed_submissions\\Fw Addition - Farnek -Auh - 21022025_20250224_161525",
+      "processed_at": "2025-02-24T16:16:06.126646",
+      "subject": "Fw: Addition - Farnek -Auh - 21/02/2025",
+      "received_time": "2025-02-24T06:29:33Z",
+      "has_attachments": true,
+      "documents_processed": [
+        "visa",
+        "unknown",
+        "emirates_id",
+        "passport"
+      ]
+    }
+  }
+}

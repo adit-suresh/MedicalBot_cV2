@@ -868,3 +868,68 @@ class TextractProcessor:
             logger.warning(
                 f"Missing required fields in {doc_type}: {', '.join(missing_fields)}"
             )
+            
+    def _determine_file_type(self, file_path: str, content_text: str) -> str:
+            """Determine file type from content and filename."""
+            name = file_path.lower()
+            doc_type = 'unknown'
+
+            # Check content patterns first
+            content_lower = content_text.lower()
+            if any(term in content_lower for term in ['passport no', 'surname', 'given names', 'nationality']):
+                doc_type = 'passport'
+            elif any(term in content_lower for term in ['emirates id', 'id number', 'هوية الإمارات']) or re.search(r'\d{3}-\d{4}-\d{7}-\d{1}', content_text):
+                doc_type = 'emirates_id'
+            elif any(term in content_lower for term in ['entry permit', 'visa', 'permit no', 'sponsor']):
+                doc_type = 'visa'
+
+            # If no content match, check filename
+            if doc_type == 'unknown':
+                if 'passport' in name:
+                    doc_type = 'passport'
+                elif 'emirates' in name or 'eid' in name:
+                    doc_type = 'emirates_id'
+                elif 'visa' in name:
+                    doc_type = 'visa'
+
+            return doc_type
+        
+    def verify_extracted_data(self, data: Dict, doc_type: str) -> Dict:
+        """Verify and clean extracted data."""
+        verified = {}
+        
+        # Define required fields per document type
+        required_fields = {
+            'passport': ['passport_number', 'first_name', 'last_name', 'nationality', 'date_of_birth'],
+            'emirates_id': ['emirates_id', 'name_en', 'nationality'],
+            'visa': ['visa_file_number', 'full_name', 'nationality', 'expiry_date']
+        }
+        
+        # Define format validators
+        validators = {
+            'emirates_id': lambda x: bool(re.match(r'^\d{3}-\d{4}-\d{7}-\d{1}$', str(x))),
+            'passport_number': lambda x: bool(re.match(r'^[A-Z0-9]{6,12}$', str(x))),
+            'date_of_birth': lambda x: bool(re.match(r'^\d{2}/\d{2}/\d{4}$', str(x))),
+            'expiry_date': lambda x: bool(re.match(r'^\d{2}/\d{2}/\d{4}$', str(x)))
+        }
+        
+        # Verify and clean each field
+        for field, value in data.items():
+            # Clean the value
+            clean_value = str(value).strip()
+            
+            # Validate format if applicable
+            if field in validators and not validators[field](clean_value):
+                logger.warning(f"Invalid format for {field}: {clean_value}")
+                continue
+                
+            verified[field] = clean_value
+        
+        # Check required fields
+        if doc_type in required_fields:
+            missing = [field for field in required_fields[doc_type] 
+                    if field not in verified or not verified[field]]
+            if missing:
+                logger.warning(f"Missing required fields for {doc_type}: {missing}")
+        
+        return verified

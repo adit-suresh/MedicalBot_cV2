@@ -189,54 +189,70 @@ class OutlookClient:
             return []
 
     def _fetch_emails_with_last_check(self, last_check_time: datetime) -> List[Dict]:
-        """
-        Internal helper that fetches emails using the given last_check_time.
-        Uses the existing pagination, filtering, and sorting logic.
-        """
+        """Internal helper that fetches emails with deduplication."""
         try:
             emails = []
+            seen_emails = set()  # Track by message ID
+            seen_subjects = {}   # Track by subject
             next_link = None
             
-            logger.info(f"Fetching emails from {TARGET_MAILBOX} since {last_check_time.isoformat()}")
+            logger.info(f"Fetching emails since {last_check_time.isoformat()}")
             
-            # Build request parameters using the given last_check_time.
             params = self._build_email_params(last_check_time)
             endpoint = f"{GRAPH_API_ENDPOINT}/users/{self.target_mailbox}/messages"
             
-            # Use pagination to retrieve emails.
             while True:
-                if next_link:
-                    response = self._execute_request("GET", next_link)
-                else:
-                    response = self._execute_request("GET", endpoint, params=params)
+                response = self._execute_request(
+                    "GET", 
+                    next_link if next_link else endpoint,
+                    params=None if next_link else params
+                )
                 
                 data = response.json()
                 batch = data.get("value", [])
-                
-                # Filter emails in this batch (subject filtering, importance, etc.)
                 filtered_batch = self._filter_emails(batch)
-                if filtered_batch:
-                    logger.info(f"Found {len(filtered_batch)} matching emails in current batch")
-                    emails.extend(filtered_batch)
                 
-                # Check for more pages.
+                for email in filtered_batch:
+                    email_id = email.get('id')
+                    subject = email.get('subject', '').strip()
+                    received_time = email.get('receivedDateTime')
+                    
+                    # Skip if we've seen this email ID
+                    if email_id in seen_emails:
+                        continue
+                        
+                    # For same subject, keep only the latest
+                    if subject in seen_subjects:
+                        old_time = seen_subjects[subject]['time']
+                        if received_time <= old_time:
+                            continue
+                        # Remove older version
+                        emails = [e for e in emails if e['subject'] != subject]
+                    
+                    seen_emails.add(email_id)
+                    seen_subjects[subject] = {
+                        'time': received_time,
+                        'id': email_id
+                    }
+                    emails.append(email)
+                
                 if "@odata.nextLink" in data:
                     next_link = data["@odata.nextLink"]
-                    if len(emails) % 50 == 0:
-                        logger.info(f"Fetched {len(emails)} emails so far, retrieving more...")
                 else:
                     break
-                
-                # Safety limit to prevent excessive pagination.
-                if len(emails) >= MAX_EMAIL_FETCH * 10:
-                    logger.warning(f"Reached safety limit of {MAX_EMAIL_FETCH * 10} emails, stopping pagination")
+                    
+                if len(emails) >= self.MAX_EMAIL_FETCH:
                     break
             
-            # Sort emails by receivedDateTime (newest first).
-            emails.sort(key=lambda email: email.get('receivedDateTime', ''), reverse=True)
-            logger.info(f"Total emails fetched: {len(emails)}")
+            # Sort by received time (newest first)
+            emails.sort(
+                key=lambda x: x.get('receivedDateTime', ''),
+                reverse=True
+            )
+            
+            logger.info(f"Found {len(emails)} unique emails")
             return emails
-
+            
         except Exception as e:
             logger.error(f"Failed to fetch emails: {str(e)}")
             raise EmailFetchError(f"Failed to fetch emails: {str(e)}")

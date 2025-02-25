@@ -9,6 +9,7 @@ import re
 from datetime import datetime
 from typing import Dict, Optional, List
 import argparse
+import shutil
 
 # Add project root to Python path
 project_root = os.path.dirname(os.path.abspath(__file__))
@@ -49,44 +50,44 @@ class WorkflowTester:
         # Create necessary directories
         os.makedirs("processed_submissions", exist_ok=True)
         
-    def is_email_processed(self, email_id: str) -> bool:
-        """Check if email has already been processed."""
-        tracking_file = "processed_emails.txt"
-        if not os.path.exists(tracking_file):
-            return False
-            
-        with open(tracking_file, 'r') as f:
-            processed_ids = f.read().splitlines()
-            
-        return email_id in processed_ids
     
-    def mark_email_processed(self, email_id: str) -> None:
-        """Mark email as processed."""
-        tracking_file = "processed_emails.txt"
-        with open(tracking_file, 'a') as f:
-            f.write(f"{email_id}\n")
-
     def run_complete_workflow(self) -> Dict:
         """Run complete workflow from email to final Excel."""
         try:
+            # Initialize email tracker
+            from src.email_tracker.email_tracker import EmailTracker
+            email_tracker = EmailTracker()
+            
             # Step 1: Fetch and process new emails
             logger.info("Step 1: Fetching emails...")
             emails = self.outlook.fetch_emails()
+            
+            from src.email_tracker.email_tracker import EmailTracker
+            email_tracker = EmailTracker()
             
             results = []
             for email in emails:
                 try:
                     # Check if email was already processed
-                    if self.is_email_processed(email['id']):
+                    if email_tracker.is_processed(email['id']):
                         logger.info(f"Email {email['id']} already processed, skipping.")
                         continue
                         
                     result = self._process_single_email(email)
                     results.append(result)
                     
-                    # If processing was successful, mark as processed
+                    # If processing was successful, mark as processed with metadata
                     if result['status'] == 'success':
-                        self.mark_email_processed(email['id'])
+                        metadata = {
+                            'process_id': result.get('process_id'),
+                            'submission_dir': result.get('submission_dir'),
+                            'processed_at': datetime.now().isoformat(),
+                            'subject': email.get('subject', 'No Subject'),
+                            'received_time': email.get('receivedDateTime', ''),
+                            'has_attachments': email.get('hasAttachments', False),
+                            'documents_processed': list(result.get('documents', {}).keys())
+                        }
+                        email_tracker.mark_processed(email['id'], metadata)
                         
                 except Exception as e:
                     logger.error(f"Error processing email {email['id']}: {str(e)}")
@@ -107,75 +108,85 @@ class WorkflowTester:
             }
 
     def _process_single_email(self, email: Dict) -> Dict:
-        """Process a single email submission."""
+        """Process a single email submission with improved document tracking."""
         email_id = email['id']
-        process_id = f"PROC_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # Clean subject for folder name
+        subject = re.sub(r'[<>:"/\\|?*]', '', email.get('subject', 'No Subject'))
+        process_id = f"{subject}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         try:
+            # Create submission directory
+            submission_dir = os.path.join("processed_submissions", process_id)
+            os.makedirs(submission_dir, exist_ok=True)
+            
             # Step 2: Get and save attachments
-            logger.info(f"Processing email {email_id}")
+            logger.info(f"Processing email {email_id} with subject: {subject}")
             attachments = self.outlook.get_attachments(email_id)
             saved_files = self.attachment_handler.process_attachments(attachments, email_id)
             
             if not saved_files:
                 raise Exception("No valid attachments found")
 
-            # Step 3: Categorize files
+            # Step 3: Categorize and process all files
             document_paths = {}
-            excel_path = None
-            
+            excel_files = []
+            processed_docs = []
+
+            # First pass: identify Excel files and documents
             for file_path in saved_files:
                 file_type = self._determine_file_type(file_path)
                 if file_type == 'excel':
-                    excel_path = file_path
+                    excel_files.append(file_path)
                 else:
-                    document_paths[file_type] = file_path
+                    doc_path = os.path.join(submission_dir, os.path.basename(file_path))
+                    shutil.copy2(file_path, doc_path)  # Use copy2 to preserve metadata
+                    document_paths[file_type] = doc_path
+                    processed_docs.append({
+                        'type': file_type,
+                        'original_name': os.path.basename(file_path),
+                        'path': doc_path
+                    })
 
-            # Step 4: Process documents
-            logger.info("Processing documents...")
+            # Step 4: Process all documents
+            logger.info(f"Processing {len(document_paths)} documents")
             extracted_data = {}
             for doc_type, file_path in document_paths.items():
-                data = self.textract.process_document(file_path, doc_type)
-                extracted_data.update(data)
+                try:
+                    data = self.textract.process_document(file_path, doc_type)
+                    logger.info(f"Extracted data from {doc_type}: {list(data.keys())}")
+                    extracted_data.update(data)
+                except Exception as e:
+                    logger.error(f"Error processing {doc_type} document: {str(e)}")
 
-            # Step 5: Process Excel
-            excel_data = None
-            if excel_path:
-                logger.info("Processing Excel data...")
-                df, errors = self.excel_processor.process_excel(excel_path, dayfirst=True)
-                if not df.empty:
-                    # Process all rows, not just the first one
-                    excel_rows = []
-                    for _, row in df.iterrows():
-                        excel_rows.append(row.to_dict())
-                    
-                    # Use first row for backward compatibility with existing code
-                    excel_data = excel_rows[0]
-                    
-                    # Log the number of rows found
-                    logger.info(f"Found {len(excel_rows)} rows in Excel file")
-                    
+            # Step 5: Process all Excel files
+            logger.info(f"Processing {len(excel_files)} Excel files")
+            all_excel_rows = []
+            for excel_path in excel_files:
+                try:
+                    df, errors = self.excel_processor.process_excel(excel_path, dayfirst=True)
+                    if not df.empty:
+                        # Process all rows
+                        for _, row in df.iterrows():
+                            all_excel_rows.append(row.to_dict())
+                        logger.info(f"Processed Excel file with {len(df)} rows")
                     if errors:
                         logger.warning(f"Excel validation errors: {errors}")
+                except Exception as e:
+                    logger.error(f"Error processing Excel file {excel_path}: {str(e)}")
 
             # Step 6: Combine data
             logger.info("Combining data...")
-            submission_dir = os.path.join(
-                "processed_submissions",
-                process_id
-            )
-            os.makedirs(submission_dir, exist_ok=True)
-            
             output_path = os.path.join(
                 submission_dir,
                 f"final_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             )
 
+            # Use all Excel rows with document data
             result = self.data_combiner.combine_and_populate_template(
                 "template.xlsx",
                 output_path,
                 extracted_data,
-                excel_data
+                all_excel_rows if all_excel_rows else None
             )
 
             # Step 7: Validate output
@@ -193,19 +204,18 @@ class WorkflowTester:
             self.completed_submissions.append(submission)
 
             # Copy all files to submission directory
-            for doc_type, file_path in document_paths.items():
-                new_path = os.path.join(submission_dir, os.path.basename(file_path))
-                os.rename(file_path, new_path)
-                document_paths[doc_type] = new_path
-
-            if excel_path:
+            for excel_path in excel_files:
                 new_path = os.path.join(submission_dir, os.path.basename(excel_path))
-                os.rename(excel_path, new_path)
+                shutil.copy2(excel_path, new_path)  # Use copy2 instead of rename
 
             return {
                 "status": "success",
                 "process_id": process_id,
-                "submission_dir": submission_dir
+                "submission_dir": submission_dir,
+                "documents": document_paths,
+                "excel_files": excel_files,
+                "documents_processed": processed_docs,
+                "rows_processed": len(all_excel_rows) if all_excel_rows else 0
             }
 
         except Exception as e:
