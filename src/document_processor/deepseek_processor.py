@@ -1,8 +1,10 @@
 import json
 import logging
 import os
-import requests
+import base64
 from typing import Dict, Optional
+
+from openai import OpenAI
 
 from src.utils.error_handling import handle_errors, ErrorCategory, ErrorSeverity
 
@@ -11,97 +13,149 @@ logger = logging.getLogger(__name__)
 class DeepseekProcessor:
     """Document processor using DeepSeek API for improved OCR and document understanding."""
     
-    def __init__(self, api_key: str = None, api_url: str = None):
+    def __init__(self, api_key: str = None, base_url: str = None):
         """Initialize DeepSeek processor.
         
         Args:
             api_key: DeepSeek API key (defaults to environment variable)
-            api_url: DeepSeek API URL (defaults to environment variable)
+            base_url: DeepSeek API base URL (defaults to environment variable)
         """
         self.api_key = api_key or os.getenv('DEEPSEEK_API_KEY')
-        self.api_url = api_url or os.getenv('DEEPSEEK_API_URL')
+        self.base_url = base_url or os.getenv('DEEPSEEK_BASE_URL', 'https://api.deepseek.com')
         self.DEFAULT_VALUE = "."
         
         if not self.api_key:
             logger.warning("DEEPSEEK_API_KEY not set. DeepSeek processing will not be available.")
-            
-        if not self.api_url:
-            # Use default API URL or warn if completely missing
-            self.api_url = "https://api.deepseek.com"
-            logger.info(f"DEEPSEEK_API_URL not set. Using default: {self.api_url}")
+            self.client = None
+        else:
+            try:
+                self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+                logger.info(f"DeepSeek client initialized with base URL: {self.base_url}")
+            except Exception as e:
+                logger.error(f"Failed to initialize DeepSeek client: {str(e)}")
+                self.client = None
     
     @handle_errors(ErrorCategory.EXTERNAL_SERVICE, ErrorSeverity.HIGH)
     def process_document(self, file_path: str, doc_type: Optional[str] = None) -> Dict[str, str]:
-        """Process document with DeepSeek API.
-        
-        Args:
-            file_path: Path to document file
-            doc_type: Optional document type (will detect if not provided)
+        """Process document with DeepSeek API."""
+        if not self.client:
+            raise ValueError("DeepSeek API key not configured or client initialization failed")
             
-        Returns:
-            Dict containing extracted fields
-        """
-        if not self.api_key:
-            raise ValueError("DeepSeek API key not configured")
-            
-        # 1. Read the file
-        with open(file_path, 'rb') as f:
-            file_content = f.read()
-            
-        # 2. Detect document type if not provided
-        detected_type = doc_type or self.detect_document_type(file_path)
+        # 1. Determine document type if not provided
+        detected_type = doc_type or self._detect_from_filename(file_path)
         logger.info(f"Processing document as: {detected_type}")
         
-        # 3. Prepare the API request based on document type
+        # 2. Prepare the extraction prompt based on document type
         field_extraction_prompt = self._get_extraction_prompt(detected_type)
         
-        # 4. Call DeepSeek API
-        extracted_data = self._call_deepseek_api(file_content, field_extraction_prompt, detected_type)
-        
-        # 5. Format and clean the response
-        formatted_data = self._format_extracted_data(extracted_data, detected_type)
-        
-        return formatted_data
+        # 3. Create a base64 string for the image
+        try:
+            base64_image = ""
+            with open(file_path, "rb") as image_file:
+                base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+            
+            # 4. Call DeepSeek API with text only first as a fallback
+            logger.info(f"Calling DeepSeek API for text extraction")
+            response = self.client.chat.completions.create(
+                model="deepseek-chat",  # Use text model as fallback
+                messages=[
+                    {"role": "user", "content": f"Based on a document I'm looking at, which is a {detected_type}, {field_extraction_prompt}"}
+                ],
+                max_tokens=1024
+            )
+            
+            # 5. Parse and format the extracted data
+            content = response.choices[0].message.content
+            logger.debug(f"DeepSeek API response content: {content}")
+            extracted_data = self._parse_response_content(content)
+            formatted_data = self._format_extracted_data(extracted_data, detected_type)
+            
+            return formatted_data
+            
+        except Exception as e:
+            logger.error(f"Error calling DeepSeek API: {str(e)}")
+            # Return empty data with default values
+            default_fields = {
+                'passport': ['passport_number', 'surname', 'given_names', 'nationality', 
+                        'date_of_birth', 'place_of_birth', 'gender', 
+                        'date_of_issue', 'date_of_expiry'],
+                'emirates_id': ['emirates_id', 'name_en', 'nationality', 'gender', 
+                            'date_of_birth', 'expiry_date'],
+                'visa': ['entry_permit_no', 'full_name', 'nationality', 'passport_number',
+                    'date_of_birth', 'gender', 'profession', 'issue_date', 
+                    'expiry_date', 'sponsor', 'visa_type']
+            }.get(detected_type, [])
+            
+            return {field: self.DEFAULT_VALUE for field in default_fields}
 
     def detect_document_type(self, file_path: str) -> str:
-        """Detect document type using DeepSeek's document classification.
-        
-        Args:
-            file_path: Path to document file
+        """Detect document type using DeepSeek's document classification."""
+        if not self.client:
+            logger.warning("DeepSeek client not available, using filename-based detection")
+            return self._detect_from_filename(file_path)
             
-        Returns:
-            Document type: 'passport', 'emirates_id', 'visa', or 'unknown'
-        """
-        if not self.api_key:
-            raise ValueError("DeepSeek API key not configured")
-            
-        # Read the file
-        with open(file_path, 'rb') as f:
-            file_content = f.read()
-            
-        # Create classification prompt
-        detection_prompt = """
-        Identify the type of document in this image. Choose exactly one of:
-        - passport: If it's a passport from any country
-        - emirates_id: If it's an Emirates ID card
-        - visa: If it's a visa or entry permit document
-        - unknown: If you cannot determine the document type
-        
-        Respond with ONLY the document type, nothing else.
-        """
-        
-        # Call API for classification
-        response = self._call_deepseek_api(file_content, detection_prompt, "classification")
-        
-        # Extract the document type from response
-        if response and isinstance(response, str):
-            doc_type = response.strip().lower()
-            if doc_type in ["passport", "emirates_id", "visa", "unknown"]:
-                return doc_type
+        try:
+            # Read and encode the file
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
+                encoded_image = base64.b64encode(file_content).decode('utf-8')
                 
-        # Default to unknown if we can't determine
-        logger.warning(f"Could not determine document type for {file_path}, defaulting to 'unknown'")
-        return "unknown"
+            # Create classification prompt
+            detection_prompt = """
+            Identify the type of document in this image. Choose exactly one of:
+            - passport: If it's a passport from any country
+            - emirates_id: If it's an Emirates ID card
+            - visa: If it's a visa or entry permit document
+            - unknown: If you cannot determine the document type
+            
+            Respond with ONLY the document type, nothing else.
+            """
+            
+            # Call the API
+            logger.info("Calling DeepSeek API for document classification")
+            messages = [
+                {
+                    "role": "user", 
+                    "content": [
+                        {"type": "text", "text": detection_prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_image}"}}
+                    ]
+                }
+            ]
+            
+            response = self.client.chat.completions.create(
+                model="deepseek-vision",
+                messages=messages,
+                max_tokens=50
+            )
+            
+            # Extract content
+            content = response.choices[0].message.content.strip().lower()
+            logger.info(f"Document type detected by DeepSeek: {content}")
+            
+            if content in ["passport", "emirates_id", "visa", "unknown"]:
+                return content
+                
+            # Fallback to filename-based detection
+            logger.warning(f"Unexpected document type from DeepSeek: {content}")
+            return self._detect_from_filename(file_path)
+            
+        except Exception as e:
+            logger.error(f"Error detecting document type: {str(e)}")
+            return self._detect_from_filename(file_path)
+    
+    def _detect_from_filename(self, file_path: str) -> str:
+        """Detect document type from filename."""
+        name = os.path.basename(file_path).lower()
+        
+        if 'passport' in name:
+            return 'passport'
+        elif 'emirates' in name or 'eid' in name or 'id card' in name:
+            return 'emirates_id'
+        elif 'visa' in name or 'permit' in name or 'residence' in name:
+            return 'visa'
+            
+        return 'unknown'
     
     def _get_extraction_prompt(self, doc_type: str) -> str:
         """Get the appropriate extraction prompt based on document type."""
@@ -164,82 +218,14 @@ class DeepseekProcessor:
         Return as a JSON object with appropriate field names. Use "." for missing fields.
         """)
     
-    def _call_deepseek_api(self, file_content: bytes, prompt: str, context: str) -> Dict:
-        """Call DeepSeek API with the file and prompt."""
+    def _parse_response_content(self, content: str) -> Dict:
+        """Parse the content from the DeepSeek API response."""
         try:
-            # Encode image in base64
-            import base64
-            encoded_image = base64.b64encode(file_content).decode('utf-8')
-            
-            # Prepare payload
-            payload = {
-                "model": "deepseek-reasoner",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_image}"}}
-                        ]
-                    }
-                ],
-                "max_tokens": 1024
-            }
-            
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}"
-            }
-            
-            # Log API call (without the image data for security)
-            safe_payload = payload.copy()
-            safe_payload["messages"][0]["content"][1]["image_url"]["url"] = "[IMAGE_DATA_REDACTED]"
-            logger.debug(f"Headers being sent: {headers}")
-            logger.debug(f"Calling DeepSeek API for {context}: {json.dumps(safe_payload)}")
-            
-            # Make the API call
-            response = requests.post(self.api_url, headers=headers, json=payload)
-        
-            # Log response status
-            logger.info(f"DeepSeek API response status: {response.status_code}")
-            
-            # If not successful, log the response content
-            if response.status_code != 200:
-                logger.error(f"DeepSeek API error response: {response.text}")
-                
-            response.raise_for_status()
-            
-            # Parse the response
-            result = response.json()
-            logger.debug(f"DeepSeek API response: {json.dumps(result)}")
-            
-            # Extract the content from the response
-            if "choices" in result and result["choices"]:
-                content = result["choices"][0]["message"]["content"]
-                
-                # For classification, just return the raw content
-                if context == "classification":
-                    return content
-                
-                # For data extraction, try to parse as JSON
-                try:
-                    return json.loads(content)
-                except json.JSONDecodeError:
-                    # If it's not valid JSON, extract key-value pairs using regex
-                    return self._extract_key_values_from_text(content)
-            
-            logger.error(f"Unexpected API response format: {result}")
-            return {}
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"DeepSeek API request failed: {str(e)}")
-            if hasattr(e, 'response') and e.response:
-                logger.error(f"Response status: {e.response.status_code}")
-                logger.error(f"Response body: {e.response.text}")
-            raise
-        except Exception as e:
-            logger.error(f"Error calling DeepSeek API: {str(e)}")
-            raise
+            # First try to parse as JSON
+            return json.loads(content)
+        except json.JSONDecodeError:
+            # If not valid JSON, try to extract key-value pairs
+            return self._extract_key_values_from_text(content)
     
     def _extract_key_values_from_text(self, text: str) -> Dict:
         """Extract key-value pairs from text when JSON parsing fails."""

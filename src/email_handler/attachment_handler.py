@@ -358,7 +358,7 @@ class AttachmentHandler:
                 return f"{size_bytes:.1f} {unit}"
             size_bytes /= 1024
             
-    def cleanup_old_files(self, days: int = 7) -> int:
+    def cleanup_old_files(self, days: int = 3) -> int:
         """
         Remove attachments older than specified days.
         

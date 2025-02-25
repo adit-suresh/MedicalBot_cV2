@@ -163,9 +163,9 @@ class OutlookClient:
         
         If last_check_time is provided, it is used directly; otherwise, the method
         will attempt to fetch emails from these incremental time windows:
-         - Last 1 hour
          - Last 12 hours
-         - Last 1 day
+         - Last 24 hours
+         - Last 3 day
          
         Returns:
             List of email dictionaries that pass client-side filtering.
@@ -178,7 +178,7 @@ class OutlookClient:
         else:
             now = datetime.now()
             # Define incremental time windows: last hour, last day, last week.
-            time_windows = [now - timedelta(hours=1), now - timedelta(hours=12), now - timedelta(days=1)]
+            time_windows = [now - timedelta(hours=12), now - timedelta(hours=24), now - timedelta(days=7)]
             for window in time_windows:
                 logger.info(f"Trying to fetch emails since {window.isoformat()}...")
                 emails = self._fetch_emails_with_last_check(window)
@@ -195,6 +195,10 @@ class OutlookClient:
             seen_emails = set()  # Track by message ID
             seen_subjects = {}   # Track by subject
             next_link = None
+            
+            # Load previously processed emails
+            from src.email_tracker.email_tracker import EmailTracker
+            email_tracker = EmailTracker()
             
             logger.info(f"Fetching emails since {last_check_time.isoformat()}")
             
@@ -217,8 +221,8 @@ class OutlookClient:
                     subject = email.get('subject', '').strip()
                     received_time = email.get('receivedDateTime')
                     
-                    # Skip if we've seen this email ID
-                    if email_id in seen_emails:
+                    # Skip if we've seen this email ID in this run or it's been processed before
+                    if email_id in seen_emails or email_tracker.is_processed(email_id):
                         continue
                         
                     # For same subject, keep only the latest
