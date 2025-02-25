@@ -43,5 +43,67 @@
         "passport"
       ]
     }
+  },
+  "AAMkAGUxNWQ4NDNhLTY4NzMtNGFiOC1hODQ2LTk0MTNiYmQ3ZmQ3OABGAAAAAACi2t7vda3UQouVjb2g8onXBwAFHuf9bWY8R6g9FjxfvqBAAAAAAAEMAAAFHuf9bWY8R6g9FjxfvqBAAAARBteoAAA=": {
+    "timestamp": "2025-02-25T11:09:50.941759",
+    "metadata": {
+      "process_id": "Fw AUH  CAT C - addition_20250225_110944",
+      "submission_dir": "processed_submissions\\Fw AUH  CAT C - addition_20250225_110944",
+      "processed_at": "2025-02-25T11:09:50.941759",
+      "subject": "Fw: AUH | CAT C - addition",
+      "received_time": "2025-02-25T06:50:20Z",
+      "has_attachments": true,
+      "documents_processed": [
+        "unknown",
+        "visa"
+      ]
+    }
+  },
+  "AAMkAGUxNWQ4NDNhLTY4NzMtNGFiOC1hODQ2LTk0MTNiYmQ3ZmQ3OABGAAAAAACi2t7vda3UQouVjb2g8onXBwAFHuf9bWY8R6g9FjxfvqBAAAAAAAEMAAAFHuf9bWY8R6g9FjxfvqBAAAARBtenAAA=": {
+    "timestamp": "2025-02-25T11:10:00.540124",
+    "metadata": {
+      "process_id": "Fw AUH  CAT C - Addition_20250225_110950",
+      "submission_dir": "processed_submissions\\Fw AUH  CAT C - Addition_20250225_110950",
+      "processed_at": "2025-02-25T11:10:00.540124",
+      "subject": "Fw: AUH | CAT C - Addition",
+      "received_time": "2025-02-25T06:49:38Z",
+      "has_attachments": true,
+      "documents_processed": [
+        "unknown",
+        "emirates_id",
+        "visa"
+      ]
+    }
+  },
+  "AAMkAGUxNWQ4NDNhLTY4NzMtNGFiOC1hODQ2LTk0MTNiYmQ3ZmQ3OABGAAAAAACi2t7vda3UQouVjb2g8onXBwAFHuf9bWY8R6g9FjxfvqBAAAAAAAEMAAAFHuf9bWY8R6g9FjxfvqBAAAARBtekAAA=": {
+    "timestamp": "2025-02-25T11:10:12.138513",
+    "metadata": {
+      "process_id": "Fw DXB LSB  CAT D - Addition_20250225_111000",
+      "submission_dir": "processed_submissions\\Fw DXB LSB  CAT D - Addition_20250225_111000",
+      "processed_at": "2025-02-25T11:10:12.138513",
+      "subject": "Fw: DXB LSB | CAT D - Addition",
+      "received_time": "2025-02-25T06:47:34Z",
+      "has_attachments": true,
+      "documents_processed": [
+        "visa",
+        "passport",
+        "unknown"
+      ]
+    }
+  },
+  "AAMkAGUxNWQ4NDNhLTY4NzMtNGFiOC1hODQ2LTk0MTNiYmQ3ZmQ3OABGAAAAAACi2t7vda3UQouVjb2g8onXBwAFHuf9bWY8R6g9FjxfvqBAAAAAAAEMAAAFHuf9bWY8R6g9FjxfvqBAAAARBtejAAA=": {
+    "timestamp": "2025-02-25T11:10:22.386979",
+    "metadata": {
+      "process_id": "Fw 26727 - SPOUSE INSURANCE - Addition_20250225_111012",
+      "submission_dir": "processed_submissions\\Fw 26727 - SPOUSE INSURANCE - Addition_20250225_111012",
+      "processed_at": "2025-02-25T11:10:22.386979",
+      "subject": "Fw: 26727 - SPOUSE INSURANCE - Addition",
+      "received_time": "2025-02-25T06:46:36Z",
+      "has_attachments": true,
+      "documents_processed": [
+        "unknown",
+        "visa"
+      ]
+    }
   }
 }
