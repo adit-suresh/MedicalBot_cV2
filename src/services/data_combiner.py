@@ -19,15 +19,17 @@ logger = logging.getLogger(__name__)
 class DataCombiner:
     """Enhanced data combiner with improved merging logic and performance."""
     
-    def __init__(self, textract_processor, excel_processor):
+    def __init__(self, textract_processor, excel_processor, deepseek_processor=None):
         """Initialize the data combiner.
         
         Args:
             textract_processor: Processor for document text extraction
             excel_processor: Processor for Excel file handling
+            deepseek_processor: Optional DeepSeek processor for name extraction
         """
         self.textract_processor = textract_processor
         self.excel_processor = excel_processor
+        self.deepseek_processor = deepseek_processor
         self.DEFAULT_VALUE = '.'
         
         # Pre-initialize field mappings for better performance
@@ -106,7 +108,7 @@ class DataCombiner:
 
     @handle_errors(ErrorCategory.PROCESS, ErrorSeverity.MEDIUM)
     def combine_and_populate_template(self, template_path: str, output_path: str, 
-                                    extracted_data: Dict, excel_data: Any = None) -> Dict:
+                                    extracted_data: Dict, excel_data: Any = None, document_paths: Dict[str, str] = None) -> Dict:
         """Combine data with better handling of multiple rows."""
         start_time = time.time()
         try:
@@ -134,11 +136,11 @@ class DataCombiner:
             if excel_data is not None and not excel_data.empty:
                 logger.info(f"Processing {len(excel_data)} rows with document data")
                 result_df = self._process_multiple_rows(extracted_data, excel_data, 
-                                                    template_columns, field_mappings)
+                                                    template_columns, field_mappings, document_paths)
             else:
                 logger.info("Using document data only")
                 result_df = self._process_single_row(extracted_data, template_columns, 
-                                                field_mappings)
+                                                field_mappings, document_paths)
                 
             # Save results
             output_dir = os.path.dirname(output_path)
@@ -205,7 +207,8 @@ class DataCombiner:
             return template_info
 
     def _process_multiple_rows(self, extracted_data: Dict, excel_data: pd.DataFrame, 
-                            template_columns: List[str], field_mappings: Dict) -> pd.DataFrame:
+                        template_columns: List[str], field_mappings: Dict,
+                        document_paths: Dict[str, str] = None) -> pd.DataFrame:
         """Process multiple rows of data with batch processing for performance."""
         result_rows = []
         
@@ -218,8 +221,8 @@ class DataCombiner:
             excel_dict = excel_row.to_dict()
             cleaned_excel = self._clean_excel_data(excel_dict)
             
-            # Combine row data
-            combined_row = self._combine_row_data(cleaned_extracted, cleaned_excel)
+            # Combine row data with document paths
+            combined_row = self._combine_row_data(cleaned_extracted, cleaned_excel, document_paths)
             
             # Map to template
             mapped_row = self._map_to_template(combined_row, template_columns, field_mappings)
@@ -228,10 +231,11 @@ class DataCombiner:
         return pd.DataFrame(result_rows)
 
     def _process_single_row(self, extracted_data: Dict, template_columns: List[str],
-                          field_mappings: Dict) -> pd.DataFrame:
+                      field_mappings: Dict, document_paths: Dict[str, str] = None) -> pd.DataFrame:
         """Process single row of data."""
         cleaned_data = self._clean_extracted_data(extracted_data)
-        mapped_data = self._map_to_template(cleaned_data, template_columns, field_mappings)
+        combined_data = self._combine_row_data(cleaned_data, {}, document_paths)
+        mapped_data = self._map_to_template(combined_data, template_columns, field_mappings)
         return pd.DataFrame([mapped_data])
 
     def _clean_extracted_data(self, data: Dict) -> Dict:
@@ -330,7 +334,7 @@ class DataCombiner:
         return eid
 
 
-    def _combine_row_data(self, extracted: Dict, excel: Dict) -> Dict:
+    def _combine_row_data(self, extracted: Dict, excel: Dict, document_paths: Dict[str, str] = None) -> Dict:
         """Combine data with improved priority rules and field mapping."""
         # Start with a deep copy of Excel data to avoid modification
         combined = copy.deepcopy(excel)
@@ -409,7 +413,35 @@ class DataCombiner:
                 if (id_field in combined and combined[id_field] == self.DEFAULT_VALUE) or \
                 (id_field not in ['emirates_id']):  # Don't override Emirates ID from Excel
                     combined[id_field] = value
+                    
+        if 'first_name' in combined and combined['first_name'] != self.DEFAULT_VALUE:
+            # Check if we have a combined name scenario
+            combined_name = combined['first_name']
             
+            # If this looks like a combined name, and either middle or last name is missing
+            if (len(combined_name.split()) > 1 and
+                (('middle_name' not in combined or combined['middle_name'] == self.DEFAULT_VALUE) or
+                ('last_name' not in combined or combined['last_name'] == self.DEFAULT_VALUE))):
+                
+                logger.info(f"Detected potential combined name in first_name field: {combined_name}")
+                first, middle, last = self._split_combined_name(combined_name)
+                
+                # Always update first name with the proper value
+                combined['first_name'] = first
+                
+                # Only update middle and last if they're missing or default
+                if 'middle_name' not in combined or combined['middle_name'] == self.DEFAULT_VALUE:
+                    combined['middle_name'] = middle
+                    if middle != self.DEFAULT_VALUE:
+                        logger.info(f"Set middle_name to: {middle}")
+                        
+                if 'last_name' not in combined or combined['last_name'] == self.DEFAULT_VALUE:
+                    combined['last_name'] = last
+                    if last != self.DEFAULT_VALUE:
+                        logger.info(f"Set last_name to: {last}")
+                        
+                logger.info(f"Split name into first: {first}, middle: {middle}, last: {last}")
+                    
         return combined
 
     def _split_full_name(self, full_name: str, combined: Dict) -> None:
@@ -621,4 +653,39 @@ class DataCombiner:
             return digits
             
         # Return cleaned numeric string
-        return numeric_str if numeric_str else value
+        return numeric_str if numeric_str else value    
+    
+    # Add this method to DataCombiner class
+    def _split_combined_name(self, combined_name: str) -> Tuple[str, str, str]:
+        """Split a combined name into first, middle, and last name components.
+        
+        Args:
+            combined_name: Combined name string
+            
+        Returns:
+            Tuple of (first_name, middle_name, last_name)
+        """
+        if not combined_name or combined_name == self.DEFAULT_VALUE:
+            return self.DEFAULT_VALUE, self.DEFAULT_VALUE, self.DEFAULT_VALUE
+            
+        name_parts = combined_name.split()
+        
+        if len(name_parts) == 1:
+            # Just one word, assume it's first name
+            return name_parts[0], self.DEFAULT_VALUE, self.DEFAULT_VALUE
+        elif len(name_parts) == 2:
+            # Two words, assume first + last
+            return name_parts[0], self.DEFAULT_VALUE, name_parts[1]
+        elif len(name_parts) == 3:
+            # Three words, assume first + middle + last
+            return name_parts[0], name_parts[1], name_parts[2]
+        else:
+            # More than three parts - assume:
+            # First word is first name
+            # Last word is last name
+            # Everything in between is middle name
+            first = name_parts[0]
+            middle = ' '.join(name_parts[1:-1])
+            last = name_parts[-1]
+            return first, middle, last
+        

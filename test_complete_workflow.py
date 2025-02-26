@@ -8,6 +8,7 @@ import pandas as pd
 import re
 from datetime import datetime
 from typing import Dict, Optional, List
+import json
 import argparse
 import shutil
 
@@ -21,11 +22,47 @@ from src.email_handler.attachment_handler import AttachmentHandler
 from src.document_processor.textract_processor import TextractProcessor
 from src.document_processor.deepseek_processor import DeepseekProcessor
 from src.services.enhanced_document_processor import EnhancedDocumentProcessorService
+from src.utils.file_sharer import FileSharer
+from src.utils.teams_notifier import TeamsNotifier
+from src.utils.email_sender import EmailSender
 
 # Import original workflow components
 from src.utils.process_tracker import ProcessTracker
 from src.services.data_combiner import DataCombiner
 from src.document_processor.excel_processor import EnhancedExcelProcessor as ExcelProcessor
+
+def get_processed_emails():
+    """Get list of processed email IDs and subjects."""
+    if os.path.exists("processed_emails.json"):
+        try:
+            with open("processed_emails.json", "r") as f:
+                data = json.load(f)
+                return [f"{id}:{data[id].get('metadata', {}).get('subject', '')}" 
+                        for id in data.keys()]
+        except:
+            return []
+    return []
+
+def add_processed_email(email_id, subject):
+    """Add email ID and subject to processed list."""
+    data = {}
+    if os.path.exists("processed_emails.json"):
+        try:
+            with open("processed_emails.json", "r") as f:
+                data = json.load(f)
+        except:
+            pass
+            
+    data[email_id] = {
+        'timestamp': datetime.now().isoformat(),
+        'metadata': {
+            'subject': subject,
+            'processed_at': datetime.now().isoformat()
+        }
+    }
+    
+    with open("processed_emails.json", "w") as f:
+        json.dump(data, f, indent=2)
 
 # Create WorkflowTester class from the original file
 class CompletedSubmission:
@@ -42,12 +79,21 @@ class WorkflowTester:
         self.outlook = OutlookClient()
         self.attachment_handler = AttachmentHandler()
         self.textract = TextractProcessor()
-        self.deepseek = DeepseekProcessor() if os.getenv('DEEPSEEK_API_KEY') else None
+        try:
+            self.deepseek = DeepseekProcessor()
+            logger.info("DeepSeek processor initialized")
+        except Exception as e:
+            logger.warning(f"Failed to initialize DeepSeek: {str(e)}")
+            self.deepseek = None
+            
         self.document_processor = EnhancedDocumentProcessorService(self.textract, self.deepseek)
+        self.file_sharer = FileSharer()
         
         self.excel_processor = ExcelProcessor()
-        self.data_combiner = DataCombiner(self.textract, self.excel_processor)
+        self.data_combiner = DataCombiner(self.textract, self.excel_processor, self.deepseek)
         self.process_tracker = ProcessTracker()
+        self.teams_notifier = TeamsNotifier()
+        self.email_sender = EmailSender()
         
         # Storage for completed submissions
         self.completed_submissions: List[CompletedSubmission] = []
@@ -55,9 +101,15 @@ class WorkflowTester:
         # Create necessary directories
         os.makedirs("processed_submissions", exist_ok=True)
         
-    
+        
     def run_complete_workflow(self) -> Dict:
         """Run complete workflow from email to final Excel."""
+        
+        if os.path.exists("processed_emails.json"):
+            with open("processed_emails.json", "r") as f:
+                content = f.read()
+                logger.info(f"processed_emails.json content: {content}")
+        
         try:
             # Initialize email tracker
             from src.email_tracker.email_tracker import EmailTracker
@@ -66,34 +118,30 @@ class WorkflowTester:
             # Step 1: Fetch and process new emails
             logger.info("Step 1: Fetching emails...")
             emails = self.outlook.fetch_emails()
-            
-            from src.email_tracker.email_tracker import EmailTracker
-            email_tracker = EmailTracker()
-            
+
+            # Get list of processed emails
+            processed_list = get_processed_emails()
+                        
             results = []
             for email in emails:
                 try:
-                    # Check if email was already processed
-                    if email_tracker.is_processed(email['id']):
-                        logger.info(f"Email {email['id']} already processed, skipping.")
+                    email_id = email['id']
+                    subject = email.get('subject', '').strip()
+                    identifier = f"{email_id}:{subject}"
+                    
+                    # Skip if already processed
+                    if identifier in processed_list:
+                        logger.info(f"Skipping already processed email: {subject}")
                         continue
                         
+                    # Process email
                     result = self._process_single_email(email)
                     results.append(result)
                     
-                    # If processing was successful, mark as processed with metadata
+                    # Record as processed if successful
                     if result['status'] == 'success':
-                        metadata = {
-                            'process_id': result.get('process_id'),
-                            'submission_dir': result.get('submission_dir'),
-                            'processed_at': datetime.now().isoformat(),
-                            'subject': email.get('subject', 'No Subject'),
-                            'received_time': email.get('receivedDateTime', ''),
-                            'has_attachments': email.get('hasAttachments', False),
-                            'documents_processed': list(result.get('documents', {}).keys())
-                        }
-                        email_tracker.mark_processed(email['id'], metadata)
-                        
+                        add_processed_email(email_id, subject)
+                            
                 except Exception as e:
                     logger.error(f"Error processing email {email['id']}: {str(e)}")
                     continue
@@ -114,6 +162,12 @@ class WorkflowTester:
 
     def _process_single_email(self, email: Dict) -> Dict:
         """Process a single email submission with improved document tracking."""
+        from src.email_tracker.email_tracker import EmailTracker
+        temp_tracker = EmailTracker()
+        logger.info(f"Checking if email {email['id']} is already processed...")
+        logger.info(f"Is processed: {temp_tracker.is_processed(email['id'])}")
+        logger.info(f"Current processed emails: {list(temp_tracker.processed_emails.keys())}")
+
         email_id = email['id']
         # Clean subject for folder name
         subject = re.sub(r'[<>:"/\\|?*]', '', email.get('subject', 'No Subject'))
@@ -162,6 +216,8 @@ class WorkflowTester:
                     extracted_data.update(data)
                 except Exception as e:
                     logger.error(f"Error processing {doc_type} document: {str(e)}")
+                    
+            document_paths = self._rename_client_files(document_paths, extracted_data)
 
             # Step 5: Process all Excel files
             logger.info(f"Processing {len(excel_files)} Excel files")
@@ -178,6 +234,17 @@ class WorkflowTester:
                         logger.warning(f"Excel validation errors: {errors}")
                 except Exception as e:
                     logger.error(f"Error processing Excel file {excel_path}: {str(e)}")
+                    
+                    # Get staff ID from Excel data if available
+                    staff_id = None
+                    if all_excel_rows and len(all_excel_rows) > 0:
+                        staff_id = all_excel_rows[0].get('staff_id', None)
+                        
+                        if staff_id and staff_id != '.':
+                            logger.info(f"Found staff ID: {staff_id}")
+                            
+                            # Rename client files with staff ID
+                            document_paths = self._rename_client_files(document_paths, staff_id)
 
             # Step 6: Combine data
             logger.info("Combining data...")
@@ -191,7 +258,8 @@ class WorkflowTester:
                 "template.xlsx",
                 output_path,
                 extracted_data,
-                all_excel_rows if all_excel_rows else None
+                all_excel_rows if all_excel_rows else None,
+                document_paths
             )
 
             # Step 7: Validate output
@@ -207,6 +275,27 @@ class WorkflowTester:
                 final_excel=output_path
             )
             self.completed_submissions.append(submission)
+            
+            # Create and send ZIP file if processing was successful
+            if result['status'] == 'success':
+                try:
+                    # Create ZIP file of the submission directory
+                    zip_path = self._create_zip(submission_dir)
+                    
+                    # Send email with attachment
+                    email_sent = self.email_sender.send_email(
+                        subject=f"Medical Bot: {subject} - Submission Complete",
+                        body=f"New submission processed: {subject}\n\nPlease find the attached ZIP file containing all processed documents.",
+                        attachment_path=zip_path
+                    )
+                    
+                    if email_sent:
+                        logger.info(f"Email sent with submission ZIP: {zip_path}")
+                    else:
+                        logger.error("Failed to send email with submission")
+                            
+                except Exception as e:
+                    logger.error(f"Error sending Teams notification: {str(e)}")
 
             # Copy all files to submission directory
             for excel_path in excel_files:
@@ -230,7 +319,156 @@ class WorkflowTester:
                 "process_id": process_id,
                 "error": str(e)
             }
-
+    
+    def _rename_client_files(self, document_paths: Dict[str, str], extracted_data: Dict) -> Dict[str, str]:
+        """Rename client files based on extracted data or document type.
+        
+        Args:
+            document_paths: Dictionary mapping document types to file paths
+            extracted_data: Dictionary of extracted data from documents
+            
+        Returns:
+            Updated dictionary with new file paths
+        """
+        # Try to get staff ID from extracted data
+        staff_id = None
+        possible_staff_id_fields = ['staff_id', 'employee_id', 'employee_no', 'staff_number']
+        
+        for field in possible_staff_id_fields:
+            if field in extracted_data and extracted_data[field] != '.':
+                staff_id = extracted_data[field]
+                logger.info(f"Found staff ID {staff_id} in extracted data")
+                break
+                
+        # If no staff ID found, try to use passport number or Emirates ID as reference
+        reference_id = None
+        if not staff_id:
+            if 'passport_number' in extracted_data and extracted_data['passport_number'] != '.':
+                reference_id = extracted_data['passport_number']
+                logger.info(f"Using passport number as reference: {reference_id}")
+            elif 'emirates_id' in extracted_data and extracted_data['emirates_id'] != '.':
+                # Use last 7 digits of Emirates ID as reference
+                eid = extracted_data['emirates_id']
+                if '-' in eid:
+                    parts = eid.split('-')
+                    if len(parts) >= 3:
+                        reference_id = parts[2][-7:]  # Last 7 digits of the third part
+                        logger.info(f"Using last 7 digits of Emirates ID as reference: {reference_id}")
+                else:
+                    # Try to extract digits if format is different
+                    digits = ''.join(filter(str.isdigit, eid))
+                    if len(digits) >= 7:
+                        reference_id = digits[-7:]
+                        logger.info(f"Using last 7 digits of Emirates ID as reference: {reference_id}")
+        
+        # If we still don't have any ID, try to get a name
+        name_reference = None
+        if not staff_id and not reference_id:
+            name_fields = ['full_name', 'name', 'surname', 'given_names', 'first_name', 'last_name']
+            for field in name_fields:
+                if field in extracted_data and extracted_data[field] != '.':
+                    # Use first part of name with no spaces
+                    name_part = extracted_data[field].split()[0]
+                    name_reference = re.sub(r'[^a-zA-Z0-9]', '', name_part)
+                    logger.info(f"Using name as reference: {name_reference}")
+                    break
+        
+        # If we still have nothing, use a timestamp
+        if not staff_id and not reference_id and not name_reference:
+            import time
+            name_reference = f"UNKNOWN_{int(time.time())}"
+            logger.warning(f"No ID or name found, using timestamp: {name_reference}")
+        
+        # Determine the reference to use
+        file_reference = staff_id or reference_id or name_reference
+        
+        # Create a copy of the paths dictionary to update
+        updated_paths = {}
+        
+        # Process each document
+        for doc_type, file_path in document_paths.items():
+            try:
+                # Skip if file doesn't exist
+                if not os.path.exists(file_path):
+                    logger.warning(f"File not found: {file_path}")
+                    updated_paths[doc_type] = file_path
+                    continue
+                    
+                # Determine new filename based on document type
+                file_dir = os.path.dirname(file_path)
+                file_ext = os.path.splitext(file_path)[1]
+                
+                if 'passport' in doc_type.lower():
+                    new_name = f"{file_reference}_PASSPORT{file_ext}"
+                elif 'emirates' in doc_type.lower() or 'eid' in doc_type.lower():
+                    new_name = f"{file_reference}_EMIRATES_ID{file_ext}"
+                elif 'visa' in doc_type.lower() or 'permit' in doc_type.lower():
+                    new_name = f"{file_reference}_VISA{file_ext}"
+                else:
+                    # Keep original name for other document types
+                    updated_paths[doc_type] = file_path
+                    continue
+                    
+                # Create the new path
+                new_path = os.path.join(file_dir, new_name)
+                
+                # If the new path already exists, don't overwrite
+                if os.path.exists(new_path) and os.path.abspath(new_path) != os.path.abspath(file_path):
+                    logger.warning(f"Cannot rename to {new_name} - file already exists")
+                    updated_paths[doc_type] = file_path
+                    continue
+                    
+                # Rename the file
+                os.rename(file_path, new_path)
+                logger.info(f"Renamed file: {os.path.basename(file_path)} -> {new_name}")
+                
+                # Update the path in the dictionary
+                updated_paths[doc_type] = new_path
+                
+            except Exception as e:
+                logger.error(f"Error renaming file {file_path}: {str(e)}")
+                updated_paths[doc_type] = file_path
+                
+        return updated_paths
+    
+    def _create_zip(self, folder_path: str) -> str:
+        """Create a ZIP file from a folder.
+        
+        Args:
+            folder_path: Path to the folder to zip
+            
+        Returns:
+            Path to the created ZIP file
+        """
+        import zipfile
+        
+        if not os.path.exists(folder_path):
+            raise FileNotFoundError(f"Folder not found: {folder_path}")
+            
+        # Create ZIP filename
+        folder_basename = os.path.basename(folder_path)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        zip_name = f"{folder_basename}_{timestamp}.zip"
+        
+        # Create ZIP file path
+        zip_path = os.path.join(os.path.dirname(folder_path), zip_name)
+        
+        # Create ZIP file
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            # Walk through all files in the directory
+            for root, _, files in os.walk(folder_path):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    
+                    # Calculate path inside the ZIP file
+                    rel_path = os.path.relpath(file_path, os.path.dirname(folder_path))
+                    
+                    # Add file to ZIP
+                    zipf.write(file_path, rel_path)
+                    
+        logger.info(f"Created ZIP file: {zip_path}")
+        return zip_path
+            
     def _validate_output_excel(self, excel_path: str) -> Dict:
         """Validate the output Excel file."""
         try:

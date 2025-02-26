@@ -283,6 +283,20 @@ class AttachmentHandler:
                     path = self.save_attachment(attachment, email_id)
                     saved_paths.append(path)
                     logger.info(f"Successfully processed: {name}")
+                    
+                    if name.lower().endswith('.zip'):
+                        logger.info(f"Processing ZIP file: {name}")
+                        try:
+                            # Extract ZIP contents
+                            extracted_files = self.extract_zip(path)
+                            
+                            # Add extracted files to saved paths
+                            if extracted_files:
+                                logger.info(f"Extracted {len(extracted_files)} files from ZIP")
+                                saved_paths.extend(extracted_files)
+                        except Exception as e:
+                            logger.error(f"Failed to process ZIP file {name}: {str(e)}")
+                    
                 else:
                     logger.info(f"Skipping invalid attachment: {name}")
                     skipped += 1
@@ -402,3 +416,55 @@ class AttachmentHandler:
                     logger.error(f"Error removing file {file_path}: {str(e)}")
                     
         return removed_count
+    
+    def extract_zip(self, zip_path: str, extract_dir: Optional[str] = None) -> List[str]:
+        """Extract a ZIP file and return paths to extracted files.
+        
+        Args:
+            zip_path: Path to ZIP file
+            extract_dir: Optional directory for extraction (defaults to same directory as ZIP)
+            
+        Returns:
+            List of paths to extracted files
+        """
+        try:
+            import zipfile
+            
+            # Determine extraction directory
+            if extract_dir is None:
+                extract_dir = os.path.join(os.path.dirname(zip_path), 'extracted')
+                
+            # Create extraction directory
+            os.makedirs(extract_dir, exist_ok=True)
+            
+            extracted_files = []
+            
+            # Extract the ZIP file
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                # Check for potentially dangerous paths
+                for file_info in zip_ref.infolist():
+                    file_name = file_info.filename
+                    
+                    # Check for absolute paths or directory traversal
+                    if file_name.startswith('/') or '..' in file_name:
+                        logger.warning(f"Potentially dangerous path in ZIP: {file_name}")
+                        continue
+                        
+                    # Check filename validity
+                    safe_name = self._sanitize_filename(os.path.basename(file_name))
+                    extract_path = os.path.join(extract_dir, safe_name)
+                    
+                    # Extract the file
+                    source = zip_ref.open(file_info)
+                    target = open(extract_path, "wb")
+                    with source, target:
+                        shutil.copyfileobj(source, target)
+                        
+                    extracted_files.append(extract_path)
+                    logger.info(f"Extracted: {extract_path}")
+            
+            return extracted_files
+            
+        except Exception as e:
+            logger.error(f"Error extracting ZIP file {zip_path}: {str(e)}")
+            return []

@@ -18,6 +18,7 @@ from config.settings import (
 from config.constants import SUBJECT_KEYWORDS
 from src.utils.error_handling import handle_errors, ErrorCategory, ErrorSeverity
 from src.utils.exceptions import AuthenticationError, EmailFetchError
+from src.email_tracker.email_tracker import EmailTracker
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class TokenManager:
         self.token_expiry = datetime.min
         self.lock = threading.RLock()
         self.refresh_margin = timedelta(minutes=5)  # Refresh token 5 minutes before expiry
+        self.email_tracker = EmailTracker()
         
     def get_token(self) -> str:
         """Get a valid access token, refreshing if necessary.
@@ -186,6 +188,8 @@ class OutlookClient:
                     logger.info(f"Found {len(emails)} emails since {window.isoformat()}.")
                     return emails
             logger.info("No emails found in incremental time windows.")
+            emails = [email for email in emails if not self.email_tracker.is_processed(email['id'])]
+            logger.info(f"After filtering processed emails: {len(emails)} emails remaining")
             return []
 
     def _fetch_emails_with_last_check(self, last_check_time: datetime) -> List[Dict]:
