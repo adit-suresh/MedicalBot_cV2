@@ -441,6 +441,10 @@ class DataCombiner:
                         logger.info(f"Set last_name to: {last}")
                         
                 logger.info(f"Split name into first: {first}, middle: {middle}, last: {last}")
+                
+                if 'effective_date' not in combined or combined['effective_date'] == self.DEFAULT_VALUE:
+                    combined['effective_date'] = datetime.now().strftime('%d/%m/%Y')
+                    logger.info(f"Setting default effective_date to today: {combined['effective_date']}")
                     
         return combined
 

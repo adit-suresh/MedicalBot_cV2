@@ -33,36 +33,15 @@ from src.document_processor.excel_processor import EnhancedExcelProcessor as Exc
 
 def get_processed_emails():
     """Get list of processed email IDs and subjects."""
-    if os.path.exists("processed_emails.json"):
-        try:
-            with open("processed_emails.json", "r") as f:
-                data = json.load(f)
-                return [f"{id}:{data[id].get('metadata', {}).get('subject', '')}" 
-                        for id in data.keys()]
-        except:
-            return []
+    if os.path.exists("processed_emails_manual.txt"):
+        with open("processed_emails_manual.txt", "r") as f:
+            return [line.strip() for line in f.readlines()]
     return []
 
 def add_processed_email(email_id, subject):
     """Add email ID and subject to processed list."""
-    data = {}
-    if os.path.exists("processed_emails.json"):
-        try:
-            with open("processed_emails.json", "r") as f:
-                data = json.load(f)
-        except:
-            pass
-            
-    data[email_id] = {
-        'timestamp': datetime.now().isoformat(),
-        'metadata': {
-            'subject': subject,
-            'processed_at': datetime.now().isoformat()
-        }
-    }
-    
-    with open("processed_emails.json", "w") as f:
-        json.dump(data, f, indent=2)
+    with open("processed_emails_manual.txt", "a") as f:
+        f.write(f"{email_id}:{subject}\n")
 
 # Create WorkflowTester class from the original file
 class CompletedSubmission:
