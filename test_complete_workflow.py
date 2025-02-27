@@ -299,67 +299,65 @@ class WorkflowTester:
                 "error": str(e)
             }
     
-    def _rename_client_files(self, document_paths: Dict[str, str], extracted_data: Dict) -> Dict[str, str]:
-        """Rename client files based on extracted data or document type.
+    def _rename_client_files(self, document_paths: Dict[str, str], excel_data: List[Dict]) -> Dict[str, str]:
+        """Rename client files based on Staff ID from Excel or name if ID not available.
         
         Args:
             document_paths: Dictionary mapping document types to file paths
-            extracted_data: Dictionary of extracted data from documents
+            excel_data: List of dictionaries with Excel data
             
         Returns:
             Updated dictionary with new file paths
         """
-        # Try to get staff ID from extracted data
+        # Try to get staff ID from Excel data first
         staff_id = None
-        possible_staff_id_fields = ['staff_id', 'employee_id', 'employee_no', 'staff_number']
         
-        for field in possible_staff_id_fields:
-            if field in extracted_data and extracted_data[field] != '.':
-                staff_id = extracted_data[field]
-                logger.info(f"Found staff ID {staff_id} in extracted data")
-                break
-                
-        # If no staff ID found, try to use passport number or Emirates ID as reference
-        reference_id = None
-        if not staff_id:
-            if 'passport_number' in extracted_data and extracted_data['passport_number'] != '.':
-                reference_id = extracted_data['passport_number']
-                logger.info(f"Using passport number as reference: {reference_id}")
-            elif 'emirates_id' in extracted_data and extracted_data['emirates_id'] != '.':
-                # Use last 7 digits of Emirates ID as reference
-                eid = extracted_data['emirates_id']
-                if '-' in eid:
-                    parts = eid.split('-')
-                    if len(parts) >= 3:
-                        reference_id = parts[2][-7:]  # Last 7 digits of the third part
-                        logger.info(f"Using last 7 digits of Emirates ID as reference: {reference_id}")
-                else:
-                    # Try to extract digits if format is different
-                    digits = ''.join(filter(str.isdigit, eid))
-                    if len(digits) >= 7:
-                        reference_id = digits[-7:]
-                        logger.info(f"Using last 7 digits of Emirates ID as reference: {reference_id}")
+        if excel_data and len(excel_data) > 0:
+            # Get staff_id and make sure it's valid
+            if 'staff_id' in excel_data[0] and excel_data[0]['staff_id'] not in ['', '.', 'nan', None]:
+                staff_id = str(excel_data[0]['staff_id']).strip()
+                logger.info(f"Using Staff ID from Excel: {staff_id}")
         
-        # If we still don't have any ID, try to get a name
+        # If no staff ID, try to use Emirates ID as identifier
+        emirates_id = None
+        if not staff_id and excel_data and len(excel_data) > 0:
+            if 'emirates_id' in excel_data[0] and excel_data[0]['emirates_id'] not in ['', '.', 'nan', None]:
+                # Use just the final 7 digits of Emirates ID
+                eid = str(excel_data[0]['emirates_id']).strip()
+                digits = ''.join(filter(str.isdigit, eid))
+                if len(digits) >= 7:
+                    emirates_id = digits[-7:]
+                    logger.info(f"Using last 7 digits of Emirates ID: {emirates_id}")
+        
+        # If no staff ID or Emirates ID, try to create a name-based reference
         name_reference = None
-        if not staff_id and not reference_id:
-            name_fields = ['full_name', 'name', 'surname', 'given_names', 'first_name', 'last_name']
-            for field in name_fields:
-                if field in extracted_data and extracted_data[field] != '.':
-                    # Use first part of name with no spaces
-                    name_part = extracted_data[field].split()[0]
-                    name_reference = re.sub(r'[^a-zA-Z0-9]', '', name_part)
-                    logger.info(f"Using name as reference: {name_reference}")
-                    break
+        if not staff_id and not emirates_id and excel_data and len(excel_data) > 0:
+            first_name = excel_data[0].get('first_name', '')
+            last_name = excel_data[0].get('last_name', '')
+            
+            if first_name and first_name not in ['', '.', 'nan', None]:
+                first_name = str(first_name).strip()
+                if last_name and last_name not in ['', '.', 'nan', None]:
+                    last_name = str(last_name).strip()
+                    name_reference = f"{first_name}_{last_name}"
+                else:
+                    name_reference = first_name
+                    
+                logger.info(f"Using name as reference: {name_reference}")
         
-        # If we still have nothing, use a timestamp
-        if not staff_id and not reference_id and not name_reference:
+        # If we have nothing, use a timestamp
+        if not staff_id and not emirates_id and not name_reference:
             import time
-            name_reference = f"UNKNOWN_{int(time.time())}"
-            logger.warning(f"No ID or name found, using timestamp: {name_reference}")
-        
-        # Determine the reference to use
-        file_reference = staff_id or reference_id or name_reference
+            random_id = f"UNKNOWN_{int(time.time())}"
+            logger.warning(f"No ID or name found, using random ID: {random_id}")
+            file_reference = random_id
+        else:
+            # Determine the reference to use (priority: staff_id > emirates_id > name)
+            file_reference = staff_id or emirates_id or name_reference
+            
+        # Sanitize the file reference to ensure it's safe for filenames
+        import re
+        file_reference = re.sub(r'[<>:"/\\|?*]', '_', str(file_reference))
         
         # Create a copy of the paths dictionary to update
         updated_paths = {}
@@ -391,11 +389,13 @@ class WorkflowTester:
                 # Create the new path
                 new_path = os.path.join(file_dir, new_name)
                 
-                # If the new path already exists, don't overwrite
+                # If the new path already exists but is different from current path, create a unique name
                 if os.path.exists(new_path) and os.path.abspath(new_path) != os.path.abspath(file_path):
-                    logger.warning(f"Cannot rename to {new_name} - file already exists")
-                    updated_paths[doc_type] = file_path
-                    continue
+                    logger.warning(f"File {new_name} already exists, creating a unique name")
+                    import uuid
+                    unique_id = str(uuid.uuid4())[:8]
+                    new_name = f"{file_reference}_{unique_id}_{doc_type.upper()}{file_ext}"
+                    new_path = os.path.join(file_dir, new_name)
                     
                 # Rename the file
                 os.rename(file_path, new_path)

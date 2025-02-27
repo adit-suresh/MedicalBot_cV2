@@ -442,6 +442,20 @@ class DataCombiner:
                         
                 logger.info(f"Split name into first: {first}, middle: {middle}, last: {last}")
                 
+                if 'visa_file_number' in combined and combined['visa_file_number'] != self.DEFAULT_VALUE:
+                    visa_number = combined['visa_file_number']
+                    
+                    # Remove any non-digit characters to extract just the numbers
+                    digits = ''.join(filter(str.isdigit, visa_number))
+                    
+                    # Check if it starts with specific digits
+                    if digits.startswith('201'):
+                        logger.info(f"Visa file number {visa_number} starts with 201, setting emirate to Dubai")
+                        combined['visa_issuance_emirate'] = 'Dubai'
+                    elif digits.startswith('101'):
+                        logger.info(f"Visa file number {visa_number} starts with 101, setting emirate to Abu Dhabi")
+                        combined['visa_issuance_emirate'] = 'Abu Dhabi'
+                
                 if 'effective_date' not in combined or combined['effective_date'] == self.DEFAULT_VALUE:
                     combined['effective_date'] = datetime.now().strftime('%d/%m/%Y')
                     logger.info(f"Setting default effective_date to today: {combined['effective_date']}")
