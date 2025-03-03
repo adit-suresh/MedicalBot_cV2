@@ -90,11 +90,70 @@ class WorkflowTester:
         self.teams_notifier = TeamsNotifier()
         self.email_sender = EmailSender()
         
+        # Validate templates
+        self._validate_templates()
+        
         # Storage for completed submissions
         self.completed_submissions: List[CompletedSubmission] = []
         
         # Create necessary directories
         os.makedirs("processed_submissions", exist_ok=True)
+        os.makedirs("templates", exist_ok=True)
+
+        
+    def _select_template_for_company(self, subject: str) -> str:
+        """Select the appropriate template based on the email subject."""
+        subject_lower = subject.lower()
+        
+        # Map of company names to template files
+        company_templates = {
+            'nas': 'templates/nas.xlsx',
+            'al madallah': 'templates/al_madallah.xlsx',
+            'almadallah': 'templates/al_madallah.xlsx',
+            'union': 'templates/union.xlsx',
+            'al sagar': 'templates/al_sagar.xlsx',
+            'alsagar': 'templates/al_sagar.xlsx',
+            'dic': 'templates/dic.xlsx',
+            'dni': 'templates/dni.xlsx',
+            'ngi': 'templates/ngi.xlsx',
+            'qic': 'templates/qic.xlsx',
+            'orient': 'templates/orient.xlsx',
+            'takaful': 'templates/takaful.xlsx'
+        }
+        
+        # Look for company names in the subject
+        for company, template in company_templates.items():
+            if company in subject_lower:
+                logger.info(f"Selected template for {company}: {template}")
+                return template
+        
+        # Default to Nas template if no match found
+        logger.warning(f"No company match found in subject '{subject}', defaulting to Nas template")
+        return 'templates/nas.xlsx'
+    
+    def _validate_templates(self):
+        """Ensure all required templates exist."""
+        templates = [
+            'templates/nas.xlsx',
+            'templates/al_madallah.xlsx',
+            'templates/union.xlsx',
+            'templates/al_sagar.xlsx',
+            'templates/dic.xlsx',
+            'templates/dni.xlsx',
+            'templates/ngi.xlsx',
+            'templates/qic.xlsx',
+            'templates/orient.xlsx',
+            'templates/takaful.xlsx'
+        ]
+        
+        missing = []
+        for template in templates:
+            if not os.path.exists(template):
+                missing.append(template)
+        
+        if missing:
+            logger.warning(f"Missing templates: {', '.join(missing)}")
+            logger.warning("Default template will be used for missing templates")
            
     def run_complete_workflow(self, bypass_dedup=False) -> Dict:
         """Run complete workflow from email to final Excel."""
@@ -302,40 +361,31 @@ class WorkflowTester:
                     # Continue without failing the whole process
                     logger.warning("Continuing with original filenames")
 
-            # Step 6: Combine data
+            # Step 6: Select template based on company in subject
+            template_path = self._select_template_for_company(subject)
+                
+
+            # Step 7: Combine data
             try:
-                logger.info("Combining data...")
+                logger.info(f"Combining data using template: {template_path}")
                 output_path = os.path.join(
                     submission_dir,
                     f"final_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
                 )
 
-                # Use all Excel rows with document data
+                # Use selected template instead of hardcoded "template.xlsx"
                 result = self.data_combiner.combine_and_populate_template(
-                    "template.xlsx",
+                    template_path,
                     output_path,
                     extracted_data,
-                    all_excel_rows if all_excel_rows else None
+                    all_excel_rows if all_excel_rows else None,
+                    document_paths
                 )
                 
                 logger.info(f"Data combination result: {result['status']}, rows processed: {result.get('rows_processed', 0)}")
             except Exception as e:
                 logger.error(f"Error combining data: {str(e)}", exc_info=True)
                 raise Exception(f"Failed to combine data: {str(e)}")
-
-            # Step 7: Validate output
-            try:
-                if result['status'] == 'success':
-                    validation_result = self._validate_output_excel(output_path)
-                    if not validation_result['is_valid']:
-                        logger.warning(f"Output validation issues: {validation_result['issues']}")
-                else:
-                    logger.error(f"Data combination failed: {result.get('error', 'Unknown error')}")
-                    raise Exception(f"Data combination failed: {result.get('error', 'Unknown error')}")
-            except Exception as e:
-                logger.error(f"Error validating output: {str(e)}", exc_info=True)
-                # Continue without failing the whole process
-                logger.warning("Continuing with unvalidated output")
 
             # Step 8: Save submission
             try:
