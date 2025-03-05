@@ -180,7 +180,7 @@ class OutlookClient:
         else:
             now = datetime.now()
             # Define incremental time windows: last hour, last day, last week.
-            time_windows = [now - timedelta(hours=12), now - timedelta(hours=24), now - timedelta(days=7)]
+            time_windows = [now - timedelta(hours=1), now - timedelta(hours=24), now - timedelta(days=3)]
             for window in time_windows:
                 logger.info(f"Trying to fetch emails since {window.isoformat()}...")
                 emails = self._fetch_emails_with_last_check(window)
