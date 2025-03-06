@@ -448,115 +448,137 @@ class WorkflowTester:
             }
     
     def _rename_client_files(self, document_paths: Dict[str, str], excel_data: List[Dict]) -> Dict[str, str]:
-        """Rename client files based on Staff ID from Excel or name if ID not available.
-        
-        Args:
-            document_paths: Dictionary mapping document types to file paths
-            excel_data: List of dictionaries with Excel data
+        """Rename files based on staff ID from Excel with improved matching."""
+        if not excel_data:
+            logger.warning("No Excel data provided, cannot rename files")
+            return document_paths
             
-        Returns:
-            Updated dictionary with new file paths
-        """
-        # Try to get staff ID from Excel data first
-        staff_id = None
-        
-        if excel_data and len(excel_data) > 0:
-            # Get staff_id and make sure it's valid
-            if 'staff_id' in excel_data[0] and excel_data[0]['staff_id'] not in ['', '.', 'nan', None]:
-                staff_id = str(excel_data[0]['staff_id']).strip()
-                logger.info(f"Using Staff ID from Excel: {staff_id}")
-        
-        # If no staff ID, try to use Emirates ID as identifier
-        emirates_id = None
-        if not staff_id and excel_data and len(excel_data) > 0:
-            if 'emirates_id' in excel_data[0] and excel_data[0]['emirates_id'] not in ['', '.', 'nan', None]:
-                # Use just the final 7 digits of Emirates ID
-                eid = str(excel_data[0]['emirates_id']).strip()
-                digits = ''.join(filter(str.isdigit, eid))
-                if len(digits) >= 7:
-                    emirates_id = digits[-7:]
-                    logger.info(f"Using last 7 digits of Emirates ID: {emirates_id}")
-        
-        # If no staff ID or Emirates ID, try to create a name-based reference
-        name_reference = None
-        if not staff_id and not emirates_id and excel_data and len(excel_data) > 0:
-            first_name = excel_data[0].get('first_name', '')
-            last_name = excel_data[0].get('last_name', '')
-            
-            if first_name and first_name not in ['', '.', 'nan', None]:
-                first_name = str(first_name).strip()
-                if last_name and last_name not in ['', '.', 'nan', None]:
-                    last_name = str(last_name).strip()
-                    name_reference = f"{first_name}_{last_name}"
-                else:
-                    name_reference = first_name
+        try:
+            # Build a map of staff ID to name for reference
+            staff_id_map = {}
+            for row in excel_data:
+                staff_id = str(row.get('staff_id', '')).strip()
+                if staff_id and staff_id != '.':
+                    first_name = str(row.get('first_name', '')).strip() if row.get('first_name', '') != '.' else ''
+                    last_name = str(row.get('last_name', '')).strip() if row.get('last_name', '') != '.' else ''
                     
-                logger.info(f"Using name as reference: {name_reference}")
-        
-        # If we have nothing, use a timestamp
-        if not staff_id and not emirates_id and not name_reference:
-            import time
-            random_id = f"UNKNOWN_{int(time.time())}"
-            logger.warning(f"No ID or name found, using random ID: {random_id}")
-            file_reference = random_id
-        else:
-            # Determine the reference to use (priority: staff_id > emirates_id > name)
-            file_reference = staff_id or emirates_id or name_reference
+                    if first_name or last_name:
+                        staff_id_map[staff_id] = {
+                            'first_name': first_name,
+                            'last_name': last_name,
+                            'full_name': f"{first_name} {last_name}".strip()
+                        }
+                        
+            logger.info(f"Found {len(staff_id_map)} staff IDs in Excel data")
             
-        # Sanitize the file reference to ensure it's safe for filenames
-        import re
-        file_reference = re.sub(r'[<>:"/\\|?*]', '_', str(file_reference))
-        
-        # Create a copy of the paths dictionary to update
-        updated_paths = {}
-        
-        # Process each document
-        for doc_type, file_path in document_paths.items():
-            try:
-                # Skip if file doesn't exist
-                if not os.path.exists(file_path):
-                    logger.warning(f"File not found: {file_path}")
-                    updated_paths[doc_type] = file_path
-                    continue
+            # Create a copy of document paths to update
+            updated_paths = {}
+            
+            # Process each document
+            for doc_type, file_path in document_paths.items():
+                try:
+                    # Skip if file doesn't exist
+                    if not os.path.exists(file_path):
+                        logger.warning(f"File not found: {file_path}")
+                        updated_paths[doc_type] = file_path
+                        continue
+                        
+                    # Extract file info
+                    file_dir = os.path.dirname(file_path)
+                    file_ext = os.path.splitext(file_path)[1]
+                    file_name = os.path.basename(file_path).lower()
                     
-                # Determine new filename based on document type
-                file_dir = os.path.dirname(file_path)
-                file_ext = os.path.splitext(file_path)[1]
-                
-                if 'passport' in doc_type.lower():
-                    new_name = f"{file_reference}_PASSPORT{file_ext}"
-                elif 'emirates' in doc_type.lower() or 'eid' in doc_type.lower():
-                    new_name = f"{file_reference}_EMIRATES_ID{file_ext}"
-                elif 'visa' in doc_type.lower() or 'permit' in doc_type.lower():
-                    new_name = f"{file_reference}_VISA{file_ext}"
-                else:
-                    # Keep original name for other document types
-                    updated_paths[doc_type] = file_path
-                    continue
-                
-                # Create the new path
-                new_path = os.path.join(file_dir, new_name)
-                
-                # If the new path already exists but is different from current path, create a unique name
-                if os.path.exists(new_path) and os.path.abspath(new_path) != os.path.abspath(file_path):
-                    logger.warning(f"File {new_name} already exists, creating a unique name")
-                    import uuid
-                    unique_id = str(uuid.uuid4())[:8]
-                    new_name = f"{file_reference}_{unique_id}_{doc_type.upper()}{file_ext}"
+                    # Find matching staff ID
+                    matched_staff_id = None
+                    
+                    # Strategy 1: Check if staff ID is already in the filename
+                    for staff_id in staff_id_map:
+                        if staff_id.lower() in file_name:
+                            matched_staff_id = staff_id
+                            logger.info(f"Found staff ID {staff_id} in filename {file_name}")
+                            break
+                    
+                    # Strategy 2: Try to match by name if no staff ID match
+                    if not matched_staff_id:
+                        best_match = None
+                        best_score = 0
+                        
+                        for staff_id, info in staff_id_map.items():
+                            score = 0
+                            
+                            # Check for first name match
+                            if info['first_name'] and info['first_name'].lower() in file_name:
+                                score += 5
+                                
+                            # Check for last name match (weighted higher)
+                            if info['last_name'] and info['last_name'].lower() in file_name:
+                                score += 10
+                                
+                            # Check for full name match
+                            if info['full_name'] and info['full_name'].lower() in file_name:
+                                score += 15
+                                
+                            # Update best match if better score
+                            if score > best_score:
+                                best_score = score
+                                best_match = staff_id
+                        
+                        # Use match if score is high enough
+                        if best_match and best_score >= 5:
+                            matched_staff_id = best_match
+                            logger.info(f"Matched file {file_name} to staff ID {matched_staff_id} by name (score: {best_score})")
+                    
+                    # If no match found, try the first staff ID as a fallback
+                    if not matched_staff_id and staff_id_map:
+                        matched_staff_id = list(staff_id_map.keys())[0]
+                        logger.warning(f"No match found for {file_name}, using first staff ID: {matched_staff_id}")
+                    
+                    # If no staff ID available, keep original name
+                    if not matched_staff_id:
+                        logger.warning(f"No staff ID available, keeping original name for {file_name}")
+                        updated_paths[doc_type] = file_path
+                        continue
+                    
+                    # Determine document type suffix
+                    if 'passport' in doc_type.lower():
+                        doc_suffix = "PASSPORT"
+                    elif 'emirates' in doc_type.lower() or 'eid' in doc_type.lower():
+                        doc_suffix = "EMIRATES_ID"
+                    elif 'visa' in doc_type.lower() or 'permit' in doc_type.lower():
+                        doc_suffix = "VISA"
+                    else:
+                        # Use doc_type as is for other document types
+                        doc_suffix = doc_type.upper()
+                    
+                    # Create new filename with staff ID and doc type
+                    import re
+                    safe_id = re.sub(r'[<>:"/\\|?*]', '_', matched_staff_id)
+                    new_name = f"{safe_id}_{doc_suffix}{file_ext}"
                     new_path = os.path.join(file_dir, new_name)
                     
-                # Rename the file
-                os.rename(file_path, new_path)
-                logger.info(f"Renamed file: {os.path.basename(file_path)} -> {new_name}")
-                
-                # Update the path in the dictionary
-                updated_paths[doc_type] = new_path
-                
-            except Exception as e:
-                logger.error(f"Error renaming file {file_path}: {str(e)}")
-                updated_paths[doc_type] = file_path
-                
-        return updated_paths
+                    # Ensure no filename conflicts
+                    if os.path.exists(new_path) and os.path.abspath(new_path) != os.path.abspath(file_path):
+                        import uuid
+                        unique = str(uuid.uuid4())[:8]
+                        new_name = f"{safe_id}_{doc_suffix}_{unique}{file_ext}"
+                        new_path = os.path.join(file_dir, new_name)
+                    
+                    # Rename file
+                    os.rename(file_path, new_path)
+                    logger.info(f"Renamed file: {os.path.basename(file_path)} -> {new_name}")
+                    
+                    # Update path in result
+                    updated_paths[doc_type] = new_path
+                    
+                except Exception as e:
+                    logger.error(f"Error renaming file {file_path}: {str(e)}")
+                    updated_paths[doc_type] = file_path
+            
+            return updated_paths
+            
+        except Exception as e:
+            logger.error(f"Error in rename_client_files: {str(e)}")
+            return document_paths
     
     def _create_zip(self, folder_path: str) -> str:
         """Create a ZIP file from a folder.
