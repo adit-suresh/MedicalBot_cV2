@@ -398,31 +398,22 @@ class WorkflowTester:
                 
                 # Try creating and sending a ZIP file
                 try:
-                    # Create separate ZIP files for each client
-                    zip_paths = self._create_client_zips(submission_dir, document_paths, all_excel_rows)
+                    zip_path = self._create_zip(submission_dir)
                     
-                    if zip_paths:
-                        logger.info(f"Created {len(zip_paths)} client ZIP files")
-                        
-                        # Send each ZIP file by email
-                        for zip_path in zip_paths:
-                            client_id = os.path.basename(zip_path).split('_')[0]
-                            email_sent = self.email_sender.send_email(
-                                subject=f"Medical Bot: {subject} - Client {client_id}",
-                                body=f"New submission processed: {subject}\nClient: {client_id}\n\nPlease find the attached ZIP file containing all processed documents for this client.",
-                                attachment_path=zip_path
-                            )
-                            
-                            if email_sent:
-                                logger.info(f"Email sent with client ZIP: {zip_path}")
-                            else:
-                                logger.error(f"Failed to send email with client ZIP: {zip_path}")
+                    # Send email with attachment
+                    email_sent = self.email_sender.send_email(
+                        subject=f"Medical Bot: {subject} - Submission Complete",
+                        body=f"New submission processed: {subject}\n\nPlease find the attached ZIP file containing all processed documents.",
+                        attachment_path=zip_path
+                    )
+                    
+                    if email_sent:
+                        logger.info(f"Email sent with submission ZIP: {zip_path}")
                     else:
-                        logger.warning("No client ZIP files were created")
+                        logger.error("Failed to send email with submission")
                         
                 except Exception as e:
-                    logger.error(f"Error creating or sending client ZIPs: {str(e)}")
-                    
+                    logger.error(f"Error creating or sending submission: {str(e)}", exc_info=True)      
             except Exception as e:
                 logger.error(f"Error saving submission: {str(e)}", exc_info=True)
                 # Continue without failing the whole process
@@ -457,61 +448,69 @@ class WorkflowTester:
             }
     
     def _rename_client_files(self, document_paths: Dict[str, str], excel_data: List[Dict]) -> Dict[str, str]:
-        """Rename files based on Excel data, extracting client identifier from documents if needed."""
-        # Group paths by client identifier
-        file_groups = {}
+        """Rename client files based on Staff ID from Excel or name if ID not available.
+        
+        Args:
+            document_paths: Dictionary mapping document types to file paths
+            excel_data: List of dictionaries with Excel data
+            
+        Returns:
+            Updated dictionary with new file paths
+        """
+        # Try to get staff ID from Excel data first
+        staff_id = None
+        
+        if excel_data and len(excel_data) > 0:
+            # Get staff_id and make sure it's valid
+            if 'staff_id' in excel_data[0] and excel_data[0]['staff_id'] not in ['', '.', 'nan', None]:
+                staff_id = str(excel_data[0]['staff_id']).strip()
+                logger.info(f"Using Staff ID from Excel: {staff_id}")
+        
+        # If no staff ID, try to use Emirates ID as identifier
+        emirates_id = None
+        if not staff_id and excel_data and len(excel_data) > 0:
+            if 'emirates_id' in excel_data[0] and excel_data[0]['emirates_id'] not in ['', '.', 'nan', None]:
+                # Use just the final 7 digits of Emirates ID
+                eid = str(excel_data[0]['emirates_id']).strip()
+                digits = ''.join(filter(str.isdigit, eid))
+                if len(digits) >= 7:
+                    emirates_id = digits[-7:]
+                    logger.info(f"Using last 7 digits of Emirates ID: {emirates_id}")
+        
+        # If no staff ID or Emirates ID, try to create a name-based reference
+        name_reference = None
+        if not staff_id and not emirates_id and excel_data and len(excel_data) > 0:
+            first_name = excel_data[0].get('first_name', '')
+            last_name = excel_data[0].get('last_name', '')
+            
+            if first_name and first_name not in ['', '.', 'nan', None]:
+                first_name = str(first_name).strip()
+                if last_name and last_name not in ['', '.', 'nan', None]:
+                    last_name = str(last_name).strip()
+                    name_reference = f"{first_name}_{last_name}"
+                else:
+                    name_reference = first_name
+                    
+                logger.info(f"Using name as reference: {name_reference}")
+        
+        # If we have nothing, use a timestamp
+        if not staff_id and not emirates_id and not name_reference:
+            import time
+            random_id = f"UNKNOWN_{int(time.time())}"
+            logger.warning(f"No ID or name found, using random ID: {random_id}")
+            file_reference = random_id
+        else:
+            # Determine the reference to use (priority: staff_id > emirates_id > name)
+            file_reference = staff_id or emirates_id or name_reference
+            
+        # Sanitize the file reference to ensure it's safe for filenames
+        import re
+        file_reference = re.sub(r'[<>:"/\\|?*]', '_', str(file_reference))
+        
+        # Create a copy of the paths dictionary to update
         updated_paths = {}
         
-        # First attempt: Use Staff ID from Excel data
-        if excel_data and len(excel_data) > 0:
-            # Process each row in Excel data
-            for row_idx, row_data in enumerate(excel_data):
-                # Try to get an identifier (staff_id, full name, etc.)
-                identifier = None
-                
-                # Priority 1: Staff ID
-                if 'staff_id' in row_data and row_data['staff_id'] not in ['', '.', None]:
-                    identifier = str(row_data['staff_id']).strip()
-                    logger.info(f"Row {row_idx}: Using Staff ID as identifier: {identifier}")
-                
-                # Priority 2: First + Last name
-                elif ('first_name' in row_data and row_data['first_name'] not in ['', '.', None] and
-                    'last_name' in row_data and row_data['last_name'] not in ['', '.', None]):
-                    first = str(row_data['first_name']).strip()
-                    last = str(row_data['last_name']).strip()
-                    identifier = f"{first}_{last}"
-                    logger.info(f"Row {row_idx}: Using name as identifier: {identifier}")
-                
-                # Priority 3: Emirates ID (last 7 digits)
-                elif 'emirates_id' in row_data and row_data['emirates_id'] not in ['', '.', None]:
-                    eid = str(row_data['emirates_id']).strip()
-                    # Extract just digits
-                    digits = ''.join(filter(str.isdigit, eid))
-                    if len(digits) >= 7:
-                        identifier = f"EID_{digits[-7:]}"
-                        logger.info(f"Row {row_idx}: Using Emirates ID as identifier: {identifier}")
-                
-                # Priority 4: Generate a random identifier
-                if not identifier:
-                    import uuid
-                    identifier = f"CLIENT_{str(uuid.uuid4())[:8]}"
-                    logger.info(f"Row {row_idx}: Using generated identifier: {identifier}")
-                
-                # Sanitize identifier for filenames
-                import re
-                identifier = re.sub(r'[<>:"/\\|?*]', '_', identifier)
-                
-                # Store identifier with row index
-                if identifier not in file_groups:
-                    file_groups[identifier] = []
-                file_groups[identifier].append(row_idx)
-        
-        # If we have no Excel data, use a single group
-        if not file_groups:
-            file_groups["UNKNOWN"] = [0]
-        
-        # Process document paths
-        # This is very simplified - documents aren't matched to specific rows yet
+        # Process each document
         for doc_type, file_path in document_paths.items():
             try:
                 # Skip if file doesn't exist
@@ -519,122 +518,83 @@ class WorkflowTester:
                     logger.warning(f"File not found: {file_path}")
                     updated_paths[doc_type] = file_path
                     continue
+                    
+                # Determine new filename based on document type
+                file_dir = os.path.dirname(file_path)
+                file_ext = os.path.splitext(file_path)[1]
                 
-                # Default to first identifier if we can't determine ownership
-                identifier = list(file_groups.keys())[0]
-                
-                # Extract document type for new filename
                 if 'passport' in doc_type.lower():
-                    doc_suffix = "PASSPORT"
+                    new_name = f"{file_reference}_PASSPORT{file_ext}"
                 elif 'emirates' in doc_type.lower() or 'eid' in doc_type.lower():
-                    doc_suffix = "EMIRATES_ID"
+                    new_name = f"{file_reference}_EMIRATES_ID{file_ext}"
                 elif 'visa' in doc_type.lower() or 'permit' in doc_type.lower():
-                    doc_suffix = "VISA"
+                    new_name = f"{file_reference}_VISA{file_ext}"
                 else:
                     # Keep original name for other document types
                     updated_paths[doc_type] = file_path
                     continue
                 
-                # Get file extension
-                file_dir = os.path.dirname(file_path)
-                file_ext = os.path.splitext(file_path)[1]
-                
-                # Create new filename
-                new_name = f"{identifier}_{doc_suffix}{file_ext}"
+                # Create the new path
                 new_path = os.path.join(file_dir, new_name)
                 
-                # Handle name collisions
+                # If the new path already exists but is different from current path, create a unique name
                 if os.path.exists(new_path) and os.path.abspath(new_path) != os.path.abspath(file_path):
+                    logger.warning(f"File {new_name} already exists, creating a unique name")
                     import uuid
                     unique_id = str(uuid.uuid4())[:8]
-                    new_name = f"{identifier}_{unique_id}_{doc_suffix}{file_ext}"
+                    new_name = f"{file_reference}_{unique_id}_{doc_type.upper()}{file_ext}"
                     new_path = os.path.join(file_dir, new_name)
-                
-                # Rename file
+                    
+                # Rename the file
                 os.rename(file_path, new_path)
                 logger.info(f"Renamed file: {os.path.basename(file_path)} -> {new_name}")
                 
-                # Update path in result
+                # Update the path in the dictionary
                 updated_paths[doc_type] = new_path
                 
             except Exception as e:
                 logger.error(f"Error renaming file {file_path}: {str(e)}")
                 updated_paths[doc_type] = file_path
-        
+                
         return updated_paths
     
-    def _create_client_zips(self, submission_dir: str, document_paths: Dict[str, str], excel_data: List[Dict]) -> List[str]:
-        """Create separate ZIP files for each client based on file names.
+    def _create_zip(self, folder_path: str) -> str:
+        """Create a ZIP file from a folder.
         
         Args:
-            submission_dir: Directory containing all submission files
-            document_paths: Dictionary mapping document types to file paths
-            excel_data: List of dictionaries containing Excel data
+            folder_path: Path to the folder to zip
             
         Returns:
-            List of created ZIP file paths
+            Path to the created ZIP file
         """
         import zipfile
-        import re
-        import os
-        from datetime import datetime
         
-        # Get all files in the submission directory
-        all_files = []
-        for root, _, files in os.walk(submission_dir):
-            for file in files:
-                file_path = os.path.join(root, file)
-                all_files.append(file_path)
-        
-        # Group files by client identifier (extracted from filenames)
-        client_files = {}
+        if not os.path.exists(folder_path):
+            raise FileNotFoundError(f"Folder not found: {folder_path}")
+            
+        # Create ZIP filename
+        folder_basename = os.path.basename(folder_path)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        zip_name = f"{folder_basename}_{timestamp}.zip"
         
-        # Pattern to extract client identifier from filename
-        # Assumes format: CLIENT_ID_DOCTYPE.ext
-        pattern = r'^(.+?)_(?:PASSPORT|EMIRATES_ID|VISA|EXCEL)'
+        # Create ZIP file path
+        zip_path = os.path.join(os.path.dirname(folder_path), zip_name)
         
-        for file_path in all_files:
-            file_name = os.path.basename(file_path)
-            
-            # Try to extract client identifier
-            match = re.match(pattern, file_name, re.IGNORECASE)
-            if match:
-                client_id = match.group(1)
-                if client_id not in client_files:
-                    client_files[client_id] = []
-                client_files[client_id].append(file_path)
-            else:
-                # For files that don't match the pattern, add to a "common" group
-                if "COMMON" not in client_files:
-                    client_files["COMMON"] = []
-                client_files["COMMON"].append(file_path)
-        
-        # Create ZIP files for each client
-        zip_paths = []
-        for client_id, files in client_files.items():
-            if not files:
-                continue
-            
-            # Create ZIP filename
-            zip_name = f"{client_id}_{timestamp}.zip"
-            zip_path = os.path.join(os.path.dirname(submission_dir), zip_name)
-            
-            try:
-                # Create ZIP file
-                with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                    for file_path in files:
-                        # Calculate path inside the ZIP file (relative to submission dir)
-                        rel_path = os.path.relpath(file_path, os.path.dirname(submission_dir))
-                        zipf.write(file_path, rel_path)
-                
-                zip_paths.append(zip_path)
-                logger.info(f"Created ZIP file for client {client_id}: {zip_path}")
-            
-            except Exception as e:
-                logger.error(f"Error creating ZIP for client {client_id}: {str(e)}")
-        
-        return zip_paths
+        # Create ZIP file
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            # Walk through all files in the directory
+            for root, _, files in os.walk(folder_path):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    
+                    # Calculate path inside the ZIP file
+                    rel_path = os.path.relpath(file_path, os.path.dirname(folder_path))
+                    
+                    # Add file to ZIP
+                    zipf.write(file_path, rel_path)
+                    
+        logger.info(f"Created ZIP file: {zip_path}")
+        return zip_path
             
     def _validate_output_excel(self, excel_path: str) -> Dict:
         """Validate the output Excel file."""
