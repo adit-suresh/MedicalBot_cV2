@@ -315,11 +315,33 @@ class WorkflowTester:
             try:
                 logger.info(f"Processing {len(document_paths)} documents")
                 extracted_data = {}
-                for doc_type, file_path in document_paths.items():
+                
+                # Process Emirates ID first if available (usually most reliable)
+                for doc_type, file_path in sorted(document_paths.items(), 
+                                                key=lambda x: 0 if 'emirates' in x[0] else 1):
                     try:
-                        data = self.textract.process_document(file_path, doc_type)
-                        logger.info(f"Extracted data from {doc_type}: {list(data.keys())}")
-                        extracted_data.update(data)
+                        # Use deepseek for enhanced OCR if available
+                        if self.deepseek and doc_type in ['passport', 'visa', 'emirates_id']:
+                            logger.info(f"Using DeepSeek for enhanced OCR on {doc_type}")
+                            deep_data = self.deepseek.process_document(file_path, doc_type)
+                            if deep_data:
+                                logger.info(f"DeepSeek extracted data from {doc_type}: {list(deep_data.keys())}")
+                                extracted_data.update(deep_data)
+                        
+                        # Always run textract as well (to capture any fields DeepSeek missed)
+                        textract_data = self.textract.process_document(file_path, doc_type)
+                        logger.info(f"Textract extracted data from {doc_type}: {list(textract_data.keys())}")
+                        
+                        # Merge data, keeping DeepSeek values if present
+                        for key, value in textract_data.items():
+                            if key not in extracted_data or extracted_data[key] == self.DEFAULT_VALUE:
+                                extracted_data[key] = value
+                        
+                        # Log extracted data for debugging
+                        for key, value in extracted_data.items():
+                            if key not in ['mrz_line1', 'mrz_line2'] and value != self.DEFAULT_VALUE:
+                                logger.info(f"Extracted {key}: {value}")
+                        
                     except Exception as e:
                         logger.error(f"Error processing {doc_type} document: {str(e)}", exc_info=True)
                         # Continue with other documents instead of failing

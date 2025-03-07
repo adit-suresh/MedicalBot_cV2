@@ -41,55 +41,79 @@ class DataCombiner:
         self._template_cache = {}
         self._template_cache_lock = threading.RLock()
         
-    def _initialize_field_mapping(self) -> Dict[str, List[str]]:
-        """Initialize comprehensive field mapping dictionary."""
+    def _initialize_field_mapping(self) -> Dict[str, Any]:
+        """Initialize comprehensive field mapping dictionary with better template matching."""
         return {
             # Personal identification fields
             'passport_no': {
-                'priority': ['passport_number', 'passport_no', 'passport'],
+                'priority': ['passport_number', 'passport_no', 'passport', 'Passport No'],
                 'format': r'^[A-Z0-9]{6,12}$',
                 'clean': lambda x: str(x).upper().strip()
-                },
-            'passport_number': ['passport_no', 'passport', 'passportnumber'],
+            },
+            'passport_number': ['passport_no', 'passport', 'passportnumber', 'Passport No'],
             'emirates_id': {
-                'priority': ['emirates_id', 'eid', 'id_number'],
+                'priority': ['emirates_id', 'eid', 'id_number', 'Emirates Id'],
                 'format': r'^\d{3}-\d{4}-\d{7}-\d{1}$',
-                'clean': lambda x: re.sub(r'[^0-9-]', '', str(x))
-                },
-            'eid': ['emirates_id', 'emirates_id_number', 'id_number', 'uae_id'],
-            'unified_no': ['unified_number', 'unified', 'entry_permit_no', 'visa_number'],
-            'entry_permit_no': ['visa_number', 'visa_file_number', 'permit_number', 'unified_no'],
+                'clean': lambda x: self._process_emirates_id(x)
+            },
+            'eid': ['emirates_id', 'emirates_id_number', 'id_number', 'uae_id', 'Emirates Id'],
+            'unified_no': ['unified_number', 'unified', 'entry_permit_no', 'visa_number', 'Unified No'],
+            'entry_permit_no': ['visa_number', 'visa_file_number', 'permit_number', 'unified_no', 'Visa File Number'],
             
             # Personal information fields
             'first_name': ['firstname', 'fname', 'given_name', 'given_names', 'name_first', 'first', 'First Name'],
             'middle_name': ['middlename', 'mname', 'name_middle', 'middle', 'Middle Name'],
             'last_name': ['lastname', 'lname', 'surname', 'name_last', 'family_name', 'last', 'Last Name'],
             'full_name': ['name', 'complete_name', 'person_name', 'customer_name'],
-            'gender': ['sex', 'gender_type','Gender'],
+            'gender': ['sex', 'gender_type', 'Gender'],
             'dob': ['date_of_birth', 'birth_date', 'birthdate', 'birth_day', 'DOB', 'DateOfBirth'],
-            'date_of_birth': ['dob', 'birth_date', 'birthdate', 'birth_day'],
-            'nationality': ['nation', 'citizenship', 'country', 'country_of_birth'],
-            'mobile_no': ['phone', 'phone_number', 'mobile', 'contact_number', 'cell'],
-            'email': ['email_address', 'mail', 'email_id'],
+            'date_of_birth': ['dob', 'birth_date', 'birthdate', 'birth_day', 'DOB'],
             
-            # Document information fields
-            'expiry_date': ['valid_until', 'expires_on', 'date_of_expiry', 'passport_expiry_date', 'visa_expiry_date'],
-            'issue_date': ['date_of_issue', 'issued_on', 'start_date'],
-            'visa_type': ['visa_category', 'permit_type', 'residence_type'],
-            'profession': ['occupation', 'job_title', 'position', 'employment'],
-            
-            # Insurance specific fields
-            'policy_number': ['policy_no', 'policy', 'insurance_policy', 'plan_number'],
-            'insurance_company': ['insurer', 'provider', 'company', 'carrier'],
-            'plan_type': ['policy_type', 'coverage_type', 'plan', 'insurance_type'],
-            'member_type': ['relationship', 'relation', 'dependent_type', 'role'],
-            'staff_id': ['employee_id', 'employee_no', 'staff_number', 'worker_id'],
-            'effective_date': ['start_date', 'coverage_start', 'policy_start', 'begin_date', 'effective_date', 'EffectiveDate'],
-            'marital_status': ['marriage_status', 'civil_status', 'Marital Status'],
-            'premium': ['insurance_premium', 'cost', 'annual_premium'],
-            'coverage_amount': ['sum_insured', 'benefit_amount', 'coverage', 'insured_amount'],
-            'salary_band': ['salary_range', 'income_band', 'salary_bracket']
+            # Add more template column mappings...
+            'contract_name': ['Contract Name'],
+            'effective_date': ['Effective Date', 'start_date', 'coverage_start', 'policy_start', 'begin_date', 'EffectiveDate'],
+            'marital_status': ['Marital Status', 'marriage_status', 'civil_status'],
+            'category': ['Category'],
+            'relation': ['Relation'],
+            'principal_card_no': ['Principal Card No.'],
+            'family_no': ['Family No.'],
+            'staff_id': ['Staff ID', 'employee_id', 'employee_no', 'staff_number', 'worker_id'],
+            'nationality': ['Nationality', 'nation', 'citizenship', 'country', 'country_of_birth'],
+            'sub_nationality': ['Sub-Nationality'],
+            'visa_file_number': ['Visa File Number'],
+            'work_country': ['Work Country'],
+            'work_emirate': ['Work Emirate'],
+            'work_region': ['Work Region'],
+            'residence_country': ['Residence Country'],
+            'residence_emirate': ['Residence Emirate'],
+            'residence_region': ['Residence Region'],
+            'mobile_no': ['Mobile No', 'phone', 'phone_number', 'mobile', 'contact_number', 'cell'],
+            'email': ['Email', 'email_address', 'mail', 'email_id'],
+            'salary_band': ['Salary Band', 'salary_range', 'income_band', 'salary_bracket'],
+            'passport_expiry_date': ['Passport Expiry Date'],
+            'visa_expiry_date': ['Visa Expiry Date']
         }
+
+    def _process_emirates_id(self, value: str) -> str:
+        """
+        Process Emirates ID with special handling.
+        If it doesn't start with 784, replace with default value.
+        """
+        if value == self.DEFAULT_VALUE:
+            return self.DEFAULT_VALUE
+            
+        # First clean the value
+        cleaned = re.sub(r'[^0-9-]', '', str(value))
+        
+        # Format with hyphens if needed
+        if '-' not in cleaned and len(cleaned) == 15:
+            cleaned = f"{cleaned[:3]}-{cleaned[3:7]}-{cleaned[7:14]}-{cleaned[14]}"
+        
+        # Check if it starts with 784 (after format standardization)
+        if not cleaned.startswith('784'):
+            return '111-1111-1111111-1'
+        
+        return cleaned
     
     def _initialize_date_fields(self) -> Set[str]:
         """Initialize set of fields that should be formatted as dates."""
@@ -285,8 +309,8 @@ class DataCombiner:
     
     def _format_output_value(self, value, field_name):
         """Format output value with proper default handling."""
-        # Middle name can have '.' as default
-        if field_name == 'middle_name' and (value is None or value == '' or value == self.DEFAULT_VALUE):
+        # Only Middle Name can have '.' as default
+        if field_name.lower() == 'middle_name' and (value is None or value == '' or value == self.DEFAULT_VALUE):
             return self.DEFAULT_VALUE
             
         # For other fields, use empty string instead of '.'
@@ -390,6 +414,13 @@ class DataCombiner:
         # Track overridden fields
         overridden = []
         
+        if 'dob' in excel and excel['dob'] not in [self.DEFAULT_VALUE, '', None, 'nan']:
+            combined['dob'] = self._format_date_value(excel['dob'])
+        elif 'DOB' in excel and excel['DOB'] not in [self.DEFAULT_VALUE, '', None, 'nan']:
+            combined['dob'] = self._format_date_value(excel['DOB'])
+        elif 'date_of_birth' in extracted and extracted['date_of_birth'] != self.DEFAULT_VALUE:
+            combined['dob'] = self._format_date_value(extracted['date_of_birth'])
+        
         # First, handle date fields from Excel data to ensure proper format
         for field in date_fields:
             if field in combined and combined[field] not in [self.DEFAULT_VALUE, '', None, 'nan']:
@@ -435,6 +466,11 @@ class DataCombiner:
                 if (id_field in combined and combined[id_field] == self.DEFAULT_VALUE) or \
                 (id_field not in ['emirates_id']):  # Don't override Emirates ID from Excel
                     combined[id_field] = value
+                    
+        if 'dob' in combined and combined['dob'] != self.DEFAULT_VALUE:
+            combined['date_of_birth'] = combined['dob']
+        elif 'date_of_birth' in combined and combined['date_of_birth'] != self.DEFAULT_VALUE:
+            combined['dob'] = combined['date_of_birth']            
                     
         if 'first_name' in combined and combined['first_name'] != self.DEFAULT_VALUE:
             # Check if we have a combined name scenario
@@ -575,12 +611,12 @@ class DataCombiner:
         if len(given_parts) > 1 and 'middle_name' in combined and combined['middle_name'] == self.DEFAULT_VALUE:
             combined['middle_name'] = ' '.join(given_parts[1:])
 
-    def _map_to_template(self, data: Dict, template_columns: List[str],
-                       field_mappings: Dict) -> Dict:
+    def _map_to_template(self, data: Dict, template_columns: List[str], field_mappings: Dict) -> Dict:
         """Map combined data to template columns with improved field detection."""
         mapped = {}
         
         for col in template_columns:
+            # First normalize the column name for matching
             normalized_col = self._normalize_column_name(col)
             
             # Try direct match first
@@ -588,29 +624,48 @@ class DataCombiner:
                 mapped[col] = data[normalized_col]
                 field_mappings[col] = normalized_col
                 continue
+            
+            # Try to match with original column name (without normalization)
+            if col in data:
+                mapped[col] = data[col]
+                field_mappings[col] = col
+                continue
                 
             # Check field variations using the mapping
             mapped_value = self.DEFAULT_VALUE
+            found_mapping = False
+            
             for field, variations in self._field_mapping.items():
-                if normalized_col in variations and field in data:
-                    mapped_value = data[field]
-                    field_mappings[col] = field
-                    break
-                elif field == normalized_col and any(var in data for var in variations):
-                    # Find first matching variation
-                    for var in variations:
+                # Handle dictionary-style field mapping
+                if isinstance(variations, dict) and 'priority' in variations:
+                    variations_list = variations['priority']
+                else:
+                    variations_list = variations
+                    
+                # Check if template column matches any variation
+                if col in variations_list or normalized_col in variations_list:
+                    if field in data:
+                        mapped_value = data[field]
+                        field_mappings[col] = field
+                        found_mapping = True
+                        break
+                # Check if any field variation matches data keys
+                elif field == normalized_col and any(var in data for var in variations_list):
+                    for var in variations_list:
                         if var in data:
                             mapped_value = data[var]
                             field_mappings[col] = var
+                            found_mapping = True
                             break
-                    break
-                    
+                    if found_mapping:
+                        break
+            
             # Use default value if no mapping found
-            if col not in field_mappings:
+            if not found_mapping:
                 field_mappings[col] = None
                 
-            mapped[col] = self._format_output_value(mapped[col], normalized_col)
-                
+            mapped[col] = self._format_output_value(mapped_value, normalized_col)
+                    
         return mapped
 
     def _clean_final_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:

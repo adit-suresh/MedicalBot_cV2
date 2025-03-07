@@ -425,27 +425,30 @@ class TextractProcessor:
         text = re.sub(r'\s+', ' ', text_content)
         text_upper = text.upper()
         
-        # Try to extract MRZ data first (most accurate)
-        mrz_data = self._extract_from_mrz(text_upper)
-        if mrz_data:
-            data.update(mrz_data)
-            
-        # Extract visible fields as backup and to fill missing data
-        # Passport number patterns
+        # More aggressive passport number search - try multiple patterns
         passport_number_patterns = [
             r'Passport\s*No[.:\s]*([A-Z0-9]{6,12})',
             r'Document\s*No[.:\s]*([A-Z0-9]{6,12})',
             r'Passport\s*Number[.:\s]*([A-Z0-9]{6,12})',
             r'No[.:\s]*([A-Z0-9]{6,12})(?=\s+|$)',
+            r'(?<!\w)([A-Z][0-9]{6,10})(?!\w)',  # Common passport format like A1234567
+            r'(?<!\w)([0-9]{6,9}[A-Z])(?!\w)',   # Format with numbers then letter like 1234567A
+            r'(?:^|\s)([A-Z][0-9]{6,9})(?:$|\s)' # Another common format
         ]
         
         for pattern in passport_number_patterns:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                # Only update if MRZ didn't provide it or default value
-                if data['passport_number'] == self.DEFAULT_VALUE:
-                    data['passport_number'] = match.group(1).strip()
+                data['passport_number'] = match.group(1).strip()
                 break
+        
+        # Try direct search in upper-case text as fallback
+        if data['passport_number'] == self.DEFAULT_VALUE:
+            # Look for patterns that might be passport numbers
+            potential_numbers = re.findall(r'(?<!\w)([A-Z][0-9]{6,9}|[0-9]{6,9}[A-Z])(?!\w)', text_upper)
+            if potential_numbers:
+                data['passport_number'] = potential_numbers[0]
+                logger.info(f"Found potential passport number with direct search: {potential_numbers[0]}")
                 
         # Name fields - only fill if MRZ didn't provide
         if data['surname'] == self.DEFAULT_VALUE:
@@ -587,6 +590,7 @@ class TextractProcessor:
         data = {
             'entry_permit_no': self.DEFAULT_VALUE,
             'unified_no': self.DEFAULT_VALUE,
+            'visa_file_number': self.DEFAULT_VALUE,
             'full_name': self.DEFAULT_VALUE,
             'nationality': self.DEFAULT_VALUE,
             'passport_number': self.DEFAULT_VALUE,
@@ -607,7 +611,10 @@ class TextractProcessor:
         # Example:
         unified_patterns = [
             r'(?:U\.?I\.?D\.?\s*No\.?|UNIFIED\s*(?:NO|NUMBER))[.:\s]*(\d[\d\s/]*)',
-            r'(?<!\w)U\.?I\.?D\.?\s*[:#]?\s*(\d[\d\s/]*)'
+            r'(?<!\w)U\.?I\.?D\.?\s*[:#]?\s*(\d[\d\s/]*)',
+            r'UNIFIED\s*(?:NO|NUMBER)[.:\s]*([0-9\s]{5,15})',
+            r'(?<!\w)(2\d{9})(?!\w)',  # Unified numbers often start with 2 and have 10 digits
+            r'(?:\s|^)(3\d{9})(?:\s|$)'  # Try similar pattern for 3-prefix
         ]
         
         for pattern in unified_patterns:
@@ -616,6 +623,34 @@ class TextractProcessor:
                 # Clean up the value (remove spaces, etc.)
                 unified_no = re.sub(r'\s', '', match.group(1))
                 data['unified_no'] = unified_no
+                break
+            
+        for pattern in unified_patterns:
+            match = re.search(pattern, text_content, re.IGNORECASE)
+            if match:
+                # Clean up the value (remove spaces, etc.)
+                unified_no = re.sub(r'\s', '', match.group(1))
+                data['unified_no'] = unified_no
+                break
+        
+        # More aggressive visa file number extraction
+        visa_file_patterns = [
+            r'Visa\s+File\s+No[.:\s]*([0-9/\-\s]+)',
+            r'File\s+No[.:\s]*([0-9/\-\s]+)',
+            r'(?<!\w)(\d{3}/\d{4}/\d{4,10})(?!\w)', # Common format like 101/2023/1234567
+            r'(?<!\w)(\d{3}-\d{4}-\d{4,10})(?!\w)', # With dashes instead of slashes
+            r'(?<!\w)([0-9]{3}[\s/\-][0-9]{4}[\s/\-][0-9]{4,10})(?!\w)'
+        ]
+        
+        for pattern in visa_file_patterns:
+            match = re.search(pattern, text_content, re.IGNORECASE)
+            if match:
+                # Clean up the value
+                visa_file = re.sub(r'\s', '', match.group(1))
+                data['visa_file_number'] = visa_file
+                # Also use as entry permit if that's missing
+                if data['entry_permit_no'] == self.DEFAULT_VALUE:
+                    data['entry_permit_no'] = visa_file
                 break
         
         # Entry permit/visa number
