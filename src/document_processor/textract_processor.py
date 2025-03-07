@@ -65,48 +65,36 @@ class TextractProcessor:
         
     @handle_errors(ErrorCategory.EXTERNAL_SERVICE, ErrorSeverity.HIGH)
     def process_document(self, file_path: str, doc_type: Optional[str] = None) -> Dict[str, str]:
-        """
-        Process document with caching and parallel block processing.
-        
-        Args:
-            file_path: Path to document file
-            doc_type: Optional document type (will detect if not provided)
-            
-        Returns:
-            Dict containing extracted fields
-            
-        Raises:
-            ServiceError: If document processing fails
-        """
+        """Process document with improved extraction reliability."""
         try:
-            # Check cache first (optimization)
-            cache_key = self._get_cache_key(file_path, doc_type)
-            if cache_key in self._cache:
-                logger.info(f"Using cached results for {os.path.basename(file_path)}")
-                return self._cache[cache_key]
-                
             # Start timing
             start_time = time.time()
+            
+            # Add debug logging
+            logger.info(f"Processing document: {file_path}")
             
             # Read file efficiently
             file_bytes = self._read_file_bytes(file_path)
 
-            # Get Textract response with retry
-            response = self._get_textract_response(file_bytes)
-
+            # Try multiple Textract features for better extraction
+            # First try with FORMS and TABLES
+            response = self._get_textract_response(file_bytes, ["FORMS", "TABLES"])
+            
             # Extract text content more efficiently
             text_content = self._extract_text_content(response)
             
-            # Log processing time
-            extraction_time = time.time() - start_time
-            logger.debug(f"Textract extraction completed in {extraction_time:.2f}s")
-
+            # Log a sample of the extracted text for debugging
+            text_sample = text_content[:200] + "..." if len(text_content) > 200 else text_content
+            logger.info(f"Extracted text sample: {text_sample}")
+            
             # Auto-detect document type if not provided
             detected_type = doc_type or self.detect_document_type(text_content)
             logger.info(f"Document type: {detected_type}")
             
             # Extract data based on detected type
             extraction_start = time.time()
+            
+            # First attempt with detected type
             if detected_type == 'visa':
                 extracted_data = self._extract_visa_data(text_content)
             elif detected_type == 'emirates_id':
@@ -117,15 +105,29 @@ class TextractProcessor:
                 # Generic extraction for unknown document types
                 extracted_data = self._extract_generic_data(text_content, response)
                 
-            # Log extraction time
-            parsing_time = time.time() - extraction_start
-            logger.debug(f"Data extraction completed in {parsing_time:.2f}s")
+            # If critical fields are missing, try generic extraction as backup
+            if self._is_extraction_incomplete(extracted_data, detected_type):
+                logger.warning(f"Incomplete extraction for {detected_type}, trying generic extraction")
+                generic_data = self._extract_generic_data(text_content, response)
                 
+                # Add missing fields from generic extraction
+                for key, value in generic_data.items():
+                    if key not in extracted_data or extracted_data[key] == self.DEFAULT_VALUE:
+                        extracted_data[key] = value
+            
+            # Try raw text searching for critical fields if still missing
+            if self._is_extraction_incomplete(extracted_data, detected_type):
+                logger.warning(f"Still missing critical fields, trying direct text search")
+                self._extract_missing_fields_from_text(extracted_data, text_content, detected_type)
+            
             # Validate extracted data
             self._validate_extracted_data(extracted_data, detected_type)
             
-            # Cache results
-            self._cache[cache_key] = extracted_data
+            # Log extraction results
+            logger.info(f"Extraction results for {detected_type}:")
+            for key, value in extracted_data.items():
+                if value != self.DEFAULT_VALUE:
+                    logger.info(f"  {key}: {value}")
             
             # Log overall processing time
             total_time = time.time() - start_time
@@ -133,14 +135,67 @@ class TextractProcessor:
             
             return extracted_data
 
-        except ClientError as e:
-            error_code = e.response['Error']['Code']
-            error_msg = e.response['Error']['Message']
-            logger.error(f"AWS Textract error ({error_code}): {error_msg}")
-            raise ServiceError(f"Textract service error: {error_msg}")
         except Exception as e:
-            logger.error(f"Error processing document {file_path}: {str(e)}")
+            logger.error(f"Error processing document {file_path}: {str(e)}", exc_info=True)
             raise
+
+    def _is_extraction_incomplete(self, data: Dict[str, str], doc_type: str) -> bool:
+        """Check if critical fields are missing from extraction."""
+        critical_fields = {
+            'passport': ['passport_number'],
+            'emirates_id': ['emirates_id'],
+            'visa': ['entry_permit_no', 'unified_no', 'visa_file_number']
+        }.get(doc_type, [])
+        
+        return any(field not in data or data[field] == self.DEFAULT_VALUE for field in critical_fields)
+
+    def _extract_missing_fields_from_text(self, data: Dict[str, str], text: str, doc_type: str) -> None:
+        """Extract critical missing fields directly from text using aggressive patterns."""
+        if doc_type == 'passport' and (data.get('passport_number') == self.DEFAULT_VALUE):
+            # Try various passport number patterns
+            patterns = [
+                r'(?<!\w)([A-Z]\d{7,8})(?!\w)',  # Common passport format A1234567
+                r'(?<!\w)(\d{7,9}[A-Z])(?!\w)',  # Reversed format 1234567A
+                r'PASSPORT\s*(?:NO|NUMBER)[.:\s]*([A-Z0-9]{6,12})',  # With label
+                r'(?<!\w)([A-Z][0-9]{6,10})(?!\w)'  # Common format with 6-10 digits
+            ]
+            for pattern in patterns:
+                matches = re.findall(pattern, text, re.IGNORECASE)
+                if matches:
+                    data['passport_number'] = matches[0]
+                    logger.info(f"Found passport number with direct search: {matches[0]}")
+                    break
+                    
+        elif doc_type == 'visa':
+            # Try to find visa file number
+            if data.get('visa_file_number') == self.DEFAULT_VALUE:
+                patterns = [
+                    r'(?:\d{3}/\d{4}/\d{4,10})',  # Common visa file format
+                    r'(?:FILE|VISA)[.:\s]*(?:NO|NUMBER)[.:\s]*(\d+[\d/]*\d+)',  # With label
+                    r'\b(\d{3,4}[/-]\d{4,}[/-]\d{4,})\b'  # Generic format
+                ]
+                for pattern in patterns:
+                    matches = re.findall(pattern, text)
+                    if matches:
+                        data['visa_file_number'] = matches[0]
+                        logger.info(f"Found visa file number with direct search: {matches[0]}")
+                        # Also use this for entry permit if missing
+                        if data.get('entry_permit_no') == self.DEFAULT_VALUE:
+                            data['entry_permit_no'] = matches[0]
+                        break
+                        
+            # Try to find unified number
+            if data.get('unified_no') == self.DEFAULT_VALUE:
+                patterns = [
+                    r'(?:U\.?I\.?D|UNIFIED)[.:\s]*(?:NO|NUMBER)[.:\s]*(\d[\d\s]*)',
+                    r'\b(2\d{9})\b'  # Unified numbers often start with 2 and have 10 digits
+                ]
+                for pattern in patterns:
+                    matches = re.findall(pattern, text, re.IGNORECASE)
+                    if matches:
+                        data['unified_no'] = re.sub(r'\s', '', matches[0])
+                        logger.info(f"Found unified number with direct search: {matches[0]}")
+                        break
             
     def _get_cache_key(self, file_path: str, doc_type: Optional[str]) -> str:
         """Generate a unique cache key for the document."""
@@ -208,6 +263,7 @@ class TextractProcessor:
     
         # Visa/Entry Permit patterns with confidence scores
         visa_patterns = [
+            (r'E-?VISA', 0.8),
             (r'ENTRY\s+PERMIT', 0.8),
             (r'PERMIT\s+NO', 0.7),
             (r'VISA\s+FILE', 0.8),
@@ -530,6 +586,7 @@ class TextractProcessor:
         """Extract visa specific data with enhanced pattern matching."""
         data = {
             'entry_permit_no': self.DEFAULT_VALUE,
+            'unified_no': self.DEFAULT_VALUE,
             'full_name': self.DEFAULT_VALUE,
             'nationality': self.DEFAULT_VALUE,
             'passport_number': self.DEFAULT_VALUE,
@@ -545,6 +602,21 @@ class TextractProcessor:
         # Normalize text for better matching
         text = re.sub(r'\s+', ' ', text_content)
         text_upper = text.upper()
+        
+        # Add specific patterns for E-Visa format
+        # Example:
+        unified_patterns = [
+            r'(?:U\.?I\.?D\.?\s*No\.?|UNIFIED\s*(?:NO|NUMBER))[.:\s]*(\d[\d\s/]*)',
+            r'(?<!\w)U\.?I\.?D\.?\s*[:#]?\s*(\d[\d\s/]*)'
+        ]
+        
+        for pattern in unified_patterns:
+            match = re.search(pattern, text_content, re.IGNORECASE)
+            if match:
+                # Clean up the value (remove spaces, etc.)
+                unified_no = re.sub(r'\s', '', match.group(1))
+                data['unified_no'] = unified_no
+                break
         
         # Entry permit/visa number
         permit_patterns = [

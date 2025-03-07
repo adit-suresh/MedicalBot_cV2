@@ -61,11 +61,11 @@ class DataCombiner:
             'entry_permit_no': ['visa_number', 'visa_file_number', 'permit_number', 'unified_no'],
             
             # Personal information fields
-            'first_name': ['firstname', 'fname', 'given_name', 'given_names', 'name_first', 'first'],
-            'middle_name': ['middlename', 'mname', 'name_middle', 'middle'],
-            'last_name': ['lastname', 'lname', 'surname', 'name_last', 'family_name', 'last'],
+            'first_name': ['firstname', 'fname', 'given_name', 'given_names', 'name_first', 'first', 'First Name'],
+            'middle_name': ['middlename', 'mname', 'name_middle', 'middle', 'Middle Name'],
+            'last_name': ['lastname', 'lname', 'surname', 'name_last', 'family_name', 'last', 'Last Name'],
             'full_name': ['name', 'complete_name', 'person_name', 'customer_name'],
-            'gender': ['sex', 'gender_type'],
+            'gender': ['sex', 'gender_type','Gender'],
             'dob': ['date_of_birth', 'birth_date', 'birthdate', 'birth_day', 'DOB', 'DateOfBirth'],
             'date_of_birth': ['dob', 'birth_date', 'birthdate', 'birth_day'],
             'nationality': ['nation', 'citizenship', 'country', 'country_of_birth'],
@@ -85,7 +85,7 @@ class DataCombiner:
             'member_type': ['relationship', 'relation', 'dependent_type', 'role'],
             'staff_id': ['employee_id', 'employee_no', 'staff_number', 'worker_id'],
             'effective_date': ['start_date', 'coverage_start', 'policy_start', 'begin_date', 'effective_date', 'EffectiveDate'],
-            'marital_status': ['marriage_status', 'civil_status'],
+            'marital_status': ['marriage_status', 'civil_status', 'Marital Status'],
             'premium': ['insurance_premium', 'cost', 'annual_premium'],
             'coverage_amount': ['sum_insured', 'benefit_amount', 'coverage', 'insured_amount'],
             'salary_band': ['salary_range', 'income_band', 'salary_bracket']
@@ -109,6 +109,16 @@ class DataCombiner:
     @handle_errors(ErrorCategory.PROCESS, ErrorSeverity.MEDIUM)
     def combine_and_populate_template(self, template_path: str, output_path: str, 
                                     extracted_data: Dict, excel_data: Any = None, document_paths: Dict[str, str] = None) -> Dict:
+        logger.info(f"Starting data combination with template: {template_path}")
+        logger.info(f"Extracted data has {len(extracted_data)} fields: {list(extracted_data.keys())}")
+        if excel_data is not None:
+            if isinstance(excel_data, pd.DataFrame):
+                logger.info(f"Excel data has {len(excel_data)} rows")
+            elif isinstance(excel_data, list):
+                logger.info(f"Excel data has {len(excel_data)} rows")
+            elif isinstance(excel_data, dict):
+                logger.info(f"Excel data has 1 row with {len(excel_data)} fields")
+                
         """Combine data with better handling of multiple rows."""
         start_time = time.time()
         try:
@@ -272,6 +282,18 @@ class DataCombiner:
                     cleaned[normalized_key] = str(value)
                     
         return cleaned
+    
+    def _format_output_value(self, value, field_name):
+        """Format output value with proper default handling."""
+        # Middle name can have '.' as default
+        if field_name == 'middle_name' and (value is None or value == '' or value == self.DEFAULT_VALUE):
+            return self.DEFAULT_VALUE
+            
+        # For other fields, use empty string instead of '.'
+        if value == self.DEFAULT_VALUE:
+            return ''
+            
+        return value
 
     def _clean_excel_data(self, data: Dict) -> Dict:
         """Clean Excel data with better handling of special values and dates."""
@@ -460,7 +482,54 @@ class DataCombiner:
                     combined['effective_date'] = datetime.now().strftime('%d/%m/%Y')
                     logger.info(f"Setting default effective_date to today: {combined['effective_date']}")
                     
-        return combined
+        # Family No = Staff ID
+        if 'staff_id' in combined and combined['staff_id'] != self.DEFAULT_VALUE:
+            combined['family_no'] = combined['staff_id']
+            logger.info(f"Set family_no to match staff_id: {combined['staff_id']}")
+
+        # Work and residence country
+        combined['work_country'] = 'United Arab Emirates'
+        combined['residence_country'] = 'United Arab Emirates'
+
+        # Commission
+        combined['commission'] = 'NO'
+
+        # Handle Mobile No format
+        if 'mobile_no' in combined and combined['mobile_no'] != self.DEFAULT_VALUE:
+            # Extract just the digits
+            digits = ''.join(filter(str.isdigit, combined['mobile_no']))
+            # Take last 9 digits
+            if len(digits) >= 9:
+                combined['mobile_no'] = digits[-9:]
+            logger.info(f"Formatted mobile_no: {combined['mobile_no']}")
+
+        # Handle emirate-based fields
+        if 'visa_issuance_emirate' in combined:
+            issuance_emirate = combined['visa_issuance_emirate']
+            
+            if issuance_emirate == 'Dubai':
+                combined['work_emirate'] = 'Dubai'
+                combined['residence_emirate'] = 'Dubai'
+                combined['work_region'] = 'DUBAI (DISTRICT UNKNOWN)'
+                combined['residence_region'] = 'DUBAI (DISTRICT UNKNOWN)'
+                combined['member_type'] = 'Expat whose residence issued in Dubai'
+            elif issuance_emirate:  # Any other emirate
+                combined['work_emirate'] = issuance_emirate
+                combined['residence_emirate'] = issuance_emirate
+                combined['work_region'] = 'Al Ain City'
+                combined['residence_region'] = 'Al Ain City'
+                combined['member_type'] = 'Expat whose residence issued other than Dubai'
+
+        # Company phone and email
+        if 'mobile_no' in combined and combined['mobile_no'] != self.DEFAULT_VALUE:
+            if 'company_phone' not in combined or combined['company_phone'] == self.DEFAULT_VALUE:
+                combined['company_phone'] = combined['mobile_no']
+
+        if 'email' in combined and combined['email'] != self.DEFAULT_VALUE:
+            if 'company_mail' not in combined or combined['company_mail'] == self.DEFAULT_VALUE:
+                combined['company_mail'] = combined['email']
+                            
+                return combined
 
     def _split_full_name(self, full_name: str, combined: Dict) -> None:
         """Split full name into components intelligently."""
@@ -540,7 +609,7 @@ class DataCombiner:
             if col not in field_mappings:
                 field_mappings[col] = None
                 
-            mapped[col] = mapped_value
+            mapped[col] = self._format_output_value(mapped[col], normalized_col)
                 
         return mapped
 
