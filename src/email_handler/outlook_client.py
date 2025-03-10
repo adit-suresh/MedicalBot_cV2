@@ -463,17 +463,23 @@ class OutlookClient:
         
     def _filter_emails(self, emails: List[Dict]) -> List[Dict]:
         """Apply additional client-side filtering to emails."""
+        """Apply additional client-side filtering to emails."""
         filtered_emails = []
         skipped_count = 0
         
         for email in emails:
-            # Skip emails without attachments (though the server filter should catch this)
+            subject = email.get('subject', '').lower()
+            
+            # Check subject for debugging
+            logger.info(f"Checking email with subject: '{subject}'")
+            
+            # Skip emails without attachments
             if not email.get('hasAttachments', False):
                 skipped_count += 1
                 continue
             
+            
             # Check for keywords in subject
-            subject = email.get('subject', '').lower()
             if not any(keyword.lower() in subject for keyword in SUBJECT_KEYWORDS):
                 skipped_count += 1
                 continue
@@ -484,6 +490,7 @@ class OutlookClient:
                 skipped_count += 1
                 continue
                 
+            logger.info(f"  - Kept: Passed all filters")
             filtered_emails.append(email)
         
         # Log filtering results

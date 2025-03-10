@@ -687,6 +687,7 @@ class DataCombiner:
         df = df.fillna(self.DEFAULT_VALUE)
         
         # Process each column
+        # Process each column
         for col in df.columns:
             # Ensure all values are strings
             df[col] = df[col].astype(str)
