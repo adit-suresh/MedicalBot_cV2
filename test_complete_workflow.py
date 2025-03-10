@@ -904,21 +904,80 @@ def run_validation(output_dir: str):
 
 def reset_processed_emails():
     """Reset the processed emails tracking file."""
-    if os.path.exists("processed_emails.json"):
-        os.remove("processed_emails.json")
-        logger.info("Removed processed_emails.json file")
-
+    files_to_reset = ["processed_emails.json", "processed_emails_manual.txt"]
+    for file in files_to_reset:
+        if os.path.exists(file):
+            try:
+                os.remove(file)
+                logger.info(f"Removed {file}")
+            except Exception as e:
+                logger.error(f"Error removing {file}: {str(e)}")
+    
+    # Create empty JSON file
+    with open("processed_emails.json", "w") as f:
+        f.write("{}")
+    logger.info("Reset processed emails tracking")
+        
+def run_diagnostics():
+    """Run diagnostics on document processing."""
+    print_separator()
+    logger.info("RUNNING TEXTRACT DIAGNOSTICS")
+    print_separator()
+    
+    # Ask for a document to test
+    import tkinter as tk
+    from tkinter import filedialog
+    
+    root = tk.Tk()
+    root.withdraw()
+    
+    file_path = filedialog.askopenfilename(
+        title="Select Document to Test",
+        filetypes=[("PDF Files", "*.pdf"), ("Image Files", "*.jpg;*.jpeg;*.png")]
+    )
+    
+    if not file_path:
+        logger.info("No file selected, exiting diagnostics")
+        return
+    
+    logger.info(f"Testing document: {file_path}")
+    
+    # Initialize components
+    textract = TextractProcessor()
+    
+    # Run diagnostics
+    doc_type = None
+    if "passport" in file_path.lower():
+        doc_type = "passport"
+    elif "emirates" in file_path.lower() or "eid" in file_path.lower():
+        doc_type = "emirates_id"
+    elif "visa" in file_path.lower():
+        doc_type = "visa"
+    
+    logger.info(f"Detected document type: {doc_type}")
+    result = textract.diagnostic_extract(file_path, doc_type)
+    
+    logger.info("Diagnostic summary:")
+    for key, value in result.items():
+        logger.info(f"  {key}: {value}")
+    
+    print_separator()
+    logger.info(f"Diagnostics complete. Check {result.get('diagnostic_dir', 'logs')} for details")
+    
 if __name__ == "__main__":
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Test complete workflow')
     parser.add_argument('--reset', action='store_true', help='Reset processed emails tracking')
     parser.add_argument('--validate', metavar='DIR', help='Validate output files in directory')
+    parser.add_argument('--diagnose', action='store_true', help='Run diagnostics on document processing')
     args = parser.parse_args()
     
     if args.reset:
         reset_processed_emails()
     
-    if args.validate:
+    if args.diagnose:
+        run_diagnostics()
+    elif args.validate:
         run_validation(args.validate)
     else:
         run_test()

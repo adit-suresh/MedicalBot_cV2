@@ -165,32 +165,60 @@ class OutlookClient:
         
         If last_check_time is provided, it is used directly; otherwise, the method
         will attempt to fetch emails from these incremental time windows:
-         - Last 12 hours
-         - Last 24 hours
-         - Last 3 day
-         
+        - Last 1 hour
+        - Last 3 hours
+        - Last 5 day
+        
         Returns:
             List of email dictionaries that pass client-side filtering.
             
         Raises:
             EmailFetchError: If fetching emails fails.
         """
-        if last_check_time is not None:
-            return self._fetch_emails_with_last_check(last_check_time)
-        else:
-            now = datetime.now()
-            # Define incremental time windows: last hour, last day, last week.
-            time_windows = [now - timedelta(hours=1), now - timedelta(hours=24), now - timedelta(days=3)]
-            for window in time_windows:
-                logger.info(f"Trying to fetch emails since {window.isoformat()}...")
-                emails = self._fetch_emails_with_last_check(window)
+        try:
+            # Initialize EmailTracker directly inside the method to avoid reference issues
+            from src.email_tracker.email_tracker import EmailTracker
+            email_tracker = EmailTracker()
+            
+            if last_check_time is not None:
+                emails = self._fetch_emails_with_last_check(last_check_time)
                 if emails:
-                    logger.info(f"Found {len(emails)} emails since {window.isoformat()}.")
-                    return emails
-            logger.info("No emails found in incremental time windows.")
-            emails = [email for email in emails if not self.email_tracker.is_processed(email['id'])]
-            logger.info(f"After filtering processed emails: {len(emails)} emails remaining")
-            return []
+                    logger.info(f"Found {len(emails)} emails before filtering processed ones")
+                    # Log subjects for debugging
+                    subjects = [email.get('subject', 'No Subject') for email in emails]
+                    logger.info(f"Email subjects before filtering: {subjects}")
+                    
+                    # Filter out already processed emails
+                    unprocessed_emails = [email for email in emails if not email_tracker.is_processed(email['id'])]
+                    logger.info(f"After filtering processed emails: {len(unprocessed_emails)} emails remaining")
+                    
+                    return unprocessed_emails
+                return []
+            else:
+                now = datetime.now()
+                # Define incremental time windows: last hour, last 3 hours, last 5 days.
+                time_windows = [now - timedelta(hours=1), now - timedelta(hours=3), now - timedelta(days=5)]
+                for window in time_windows:
+                    logger.info(f"Trying to fetch emails since {window.isoformat()}...")
+                    emails = self._fetch_emails_with_last_check(window)
+                    if emails:
+                        logger.info(f"Found {len(emails)} emails since {window.isoformat()} before filtering processed ones")
+                        # Log subjects for debugging
+                        subjects = [email.get('subject', 'No Subject') for email in emails]
+                        logger.info(f"Email subjects before filtering: {subjects}")
+                        
+                        # Filter out already processed emails
+                        unprocessed_emails = [email for email in emails if not email_tracker.is_processed(email['id'])]
+                        logger.info(f"After filtering processed emails: {len(unprocessed_emails)} emails remaining")
+                        
+                        if unprocessed_emails:
+                            return unprocessed_emails
+                
+                logger.info("No unprocessed emails found in any time window")
+                return []
+        except Exception as e:
+            logger.error(f"Error in fetch_emails: {str(e)}")
+            raise EmailFetchError(f"Failed to fetch emails: {str(e)}")
 
     def _fetch_emails_with_last_check(self, last_check_time: datetime) -> List[Dict]:
         """Internal helper that fetches emails with deduplication."""
@@ -434,39 +462,33 @@ class OutlookClient:
         return params
         
     def _filter_emails(self, emails: List[Dict]) -> List[Dict]:
-        """Apply additional client-side filtering to emails.
-        
-        This provides finer-grained control over email filtering that
-        might not be possible with OData queries.
-        
-        Args:
-            emails: List of emails to filter
-            
-        Returns:
-            Filtered list of emails
-        """
+        """Apply additional client-side filtering to emails."""
         filtered_emails = []
+        skipped_count = 0
         
         for email in emails:
             # Skip emails without attachments (though the server filter should catch this)
             if not email.get('hasAttachments', False):
+                skipped_count += 1
                 continue
             
-            subject = email.get('subject', '').lower()
-            if any(keyword.lower() in subject for keyword in SUBJECT_KEYWORDS):
-                filtered_emails.append(email)
-                
             # Check for keywords in subject
             subject = email.get('subject', '').lower()
             if not any(keyword.lower() in subject for keyword in SUBJECT_KEYWORDS):
+                skipped_count += 1
                 continue
                 
             # Only keep high and normal importance emails
             importance = email.get('importance', 'normal')
             if importance == 'low':
+                skipped_count += 1
                 continue
                 
             filtered_emails.append(email)
+        
+        # Log filtering results
+        if len(emails) > 0:
+            logger.info(f"Email filtering: kept {len(filtered_emails)}/{len(emails)} emails ({skipped_count} skipped)")
             
         return filtered_emails
 

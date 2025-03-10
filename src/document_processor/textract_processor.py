@@ -9,6 +9,7 @@ import concurrent.futures
 from botocore.exceptions import ClientError
 from functools import lru_cache
 import time
+import json
 
 from src.utils.error_handling import (
     ServiceError, ApplicationError, handle_errors, 
@@ -212,12 +213,15 @@ class TextractProcessor:
             raise ServiceError(f"File read error: {str(e)}")
     
     @retry_on_error(max_attempts=3)
-    def _get_textract_response(self, file_bytes: bytes) -> Dict:
+    def _get_textract_response(self, file_bytes: bytes, feature_types=None) -> Dict:
         """Get Textract response with retry logic."""
         try:
+            if feature_types is None:
+                feature_types = ['FORMS', 'TABLES']
+                
             response = self.textract.analyze_document(
                 Document={'Bytes': file_bytes},
-                FeatureTypes=['FORMS', 'TABLES']
+                FeatureTypes=feature_types
             )
             return response
         except ClientError as e:
@@ -1040,3 +1044,77 @@ class TextractProcessor:
                 logger.warning(f"Missing required fields for {doc_type}: {missing}")
         
         return verified
+    
+    def diagnostic_extract(self, file_path: str, doc_type: str = None) -> Dict:
+        """Run diagnostic extraction to check if Textract is working."""
+        logger.info(f"Running diagnostic extraction on {file_path}")
+        
+        try:
+            # Read file
+            file_bytes = self._read_file_bytes(file_path)
+            
+            # Call textract
+            response = self.textract.analyze_document(
+                Document={'Bytes': file_bytes},
+                FeatureTypes=['FORMS', 'TABLES']
+            )
+            
+            # Log blocks detected
+            blocks = response.get('Blocks', [])
+            logger.info(f"Textract detected {len(blocks)} blocks in the document")
+            
+            # Count different block types
+            block_types = {}
+            for block in blocks:
+                b_type = block.get('BlockType')
+                block_types[b_type] = block_types.get(b_type, 0) + 1
+            
+            logger.info(f"Block types: {block_types}")
+            
+            # Extract text from each LINE block
+            lines = []
+            for block in blocks:
+                if block['BlockType'] == 'LINE':
+                    lines.append(block.get('Text', ''))
+            
+            # Log sample of text
+            sample_text = "\n".join(lines[:10])
+            logger.info(f"Sample text from document:\n{sample_text}")
+            
+            # Save diagnostic info
+            diagnostic_dir = os.path.join(os.path.dirname(file_path), "textract_diagnostics")
+            os.makedirs(diagnostic_dir, exist_ok=True)
+            
+            # Save response
+            diagnostic_file = os.path.join(diagnostic_dir, f"{os.path.basename(file_path)}_response.json")
+            with open(diagnostic_file, 'w') as f:
+                json.dump(response, f, indent=2, default=str)
+            
+            # Save extracted text
+            text_file = os.path.join(diagnostic_dir, f"{os.path.basename(file_path)}_text.txt")
+            with open(text_file, 'w') as f:
+                f.write("\n".join(lines))
+            
+            logger.info(f"Diagnostic info saved to {diagnostic_dir}")
+            
+            # Run normal processing
+            normal_result = self.process_document(file_path, doc_type)
+            
+            # Log extracted fields
+            if normal_result:
+                logger.info(f"Fields extracted from document:")
+                for key, value in normal_result.items():
+                    if value != self.DEFAULT_VALUE:
+                        logger.info(f"  {key}: {value}")
+            
+            return {
+                "diagnostic_dir": diagnostic_dir,
+                "block_count": len(blocks),
+                "block_types": block_types,
+                "text_lines": len(lines),
+                "extracted_fields": len([k for k, v in normal_result.items() if v != self.DEFAULT_VALUE]) if normal_result else 0
+            }
+            
+        except Exception as e:
+            logger.error(f"Diagnostics failed: {str(e)}")
+            return {"error": str(e)}

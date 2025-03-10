@@ -94,26 +94,26 @@ class DataCombiner:
             'visa_expiry_date': ['Visa Expiry Date']
         }
 
-    def _process_emirates_id(self, value: str) -> str:
-        """
-        Process Emirates ID with special handling.
-        If it doesn't start with 784, replace with default value.
-        """
-        if value == self.DEFAULT_VALUE:
-            return self.DEFAULT_VALUE
-            
-        # First clean the value
-        cleaned = re.sub(r'[^0-9-]', '', str(value))
+    def _process_emirates_id(self, value):
+        """Replace non-784 Emirates IDs with default value."""
+        if value is None or pd.isna(value) or value == '' or value == self.DEFAULT_VALUE:
+            return ''
         
-        # Format with hyphens if needed
-        if '-' not in cleaned and len(cleaned) == 15:
-            cleaned = f"{cleaned[:3]}-{cleaned[3:7]}-{cleaned[7:14]}-{cleaned[14]}"
+        # Clean and standardize the format
+        value_str = str(value)
+        # Remove non-digit and non-hyphen characters
+        clean_value = re.sub(r'[^0-9\-]', '', value_str)
         
-        # Check if it starts with 784 (after format standardization)
-        if not cleaned.startswith('784'):
+        # Add hyphens if missing
+        if '-' not in clean_value and len(clean_value) == 15:
+            clean_value = f"{clean_value[:3]}-{clean_value[3:7]}-{clean_value[7:14]}-{clean_value[14]}"
+        
+        # Check if it starts with 784
+        if not clean_value.startswith('784'):
+            logger.info(f"Emirates ID '{clean_value}' doesn't start with 784, replacing with default")
             return '111-1111-1111111-1'
         
-        return cleaned
+        return clean_value
     
     def _initialize_date_fields(self) -> Set[str]:
         """Initialize set of fields that should be formatted as dates."""
@@ -166,7 +166,17 @@ class DataCombiner:
                 elif not isinstance(excel_data, pd.DataFrame):
                     raise TypeError(f"Excel data must be DataFrame, dict, or list")
             
-            # Process data
+            # Process data with proper validation
+            if excel_data is not None:
+                if isinstance(excel_data, dict):
+                    excel_data = pd.DataFrame([excel_data])
+                elif isinstance(excel_data, list) and excel_data:
+                    excel_data = pd.DataFrame(excel_data)
+                elif not isinstance(excel_data, pd.DataFrame):
+                    logger.warning("Excel data has invalid type, treating as empty")
+                    excel_data = pd.DataFrame()
+
+            # Handle empty DataFrames properly
             if excel_data is not None and not excel_data.empty:
                 logger.info(f"Processing {len(excel_data)} rows with document data")
                 result_df = self._process_multiple_rows(extracted_data, excel_data, 
@@ -188,6 +198,9 @@ class DataCombiner:
                     result_df[field] = result_df[field].apply(
                         lambda x: self._format_date_value(x) if pd.notna(x) else self.DEFAULT_VALUE
                     )
+            
+            # Apply special formatting for default values
+            result_df = self._format_fields_for_output(result_df)
             
             # Save to Excel
             result_df.to_excel(output_path, index=False)
@@ -673,29 +686,46 @@ class DataCombiner:
         # Replace NaN/None with default value
         df = df.fillna(self.DEFAULT_VALUE)
         
-        # Ensure all columns are strings
+        # Process each column
         for col in df.columns:
+            # Ensure all values are strings
             df[col] = df[col].astype(str)
-            
-            # Apply normalization based on field type
             normalized_col = self._normalize_column_name(col)
             
-            # Handle date fields
-            if normalized_col in self._date_fields:
-                df[col] = df[col].apply(self._format_date_value)
-                
-            # Handle numeric fields
-            elif normalized_col in self._numeric_fields:
+            # Only Middle Name should have '.' default
+            if normalized_col == 'middle_name':
                 df[col] = df[col].apply(
-                    lambda x: self._format_numeric_value(x) if x != self.DEFAULT_VALUE else x
+                    lambda x: self.DEFAULT_VALUE if pd.isna(x) or x == '' or x == self.DEFAULT_VALUE else x
+                )
+            else:
+                # All other columns should be empty if they have the default value
+                df[col] = df[col].apply(
+                    lambda x: '' if pd.isna(x) or x == '' or x == self.DEFAULT_VALUE else x
+                )
+                
+            # Handle date fields with special formatting
+            if normalized_col in self._date_fields and df[col].any():
+                df[col] = df[col].apply(
+                    lambda x: self._format_date_value(x) if x and x != '' else x
+                )
+                
+            # Handle numeric fields with special formatting
+            elif normalized_col in self._numeric_fields and df[col].any():
+                df[col] = df[col].apply(
+                    lambda x: self._format_numeric_value(x) if x and x != '' else x
                 )
                 
             # Clean up strings (remove excess whitespace)
             else:
                 df[col] = df[col].apply(
-                    lambda x: re.sub(r'\s+', ' ', x).strip() if x != self.DEFAULT_VALUE else x
+                    lambda x: re.sub(r'\s+', ' ', x).strip() if x and x != '' else x
                 )
-                
+        
+        # Make sure Emirates ID is properly formatted
+        eid_cols = [col for col in df.columns if self._normalize_column_name(col) == 'emirates_id']
+        for col in eid_cols:
+            df[col] = df[col].apply(self._process_emirates_id)
+        
         return df
 
     def _normalize_column_name(self, column: str) -> str:
@@ -830,4 +860,23 @@ class DataCombiner:
             middle = ' '.join(name_parts[1:-1])
             last = name_parts[-1]
             return first, middle, last
+        
+    def _format_fields_for_output(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Handle default values correctly - '.' only for middle name, empty for others."""
+        for col in df.columns:
+            col_lower = col.lower()
+            # Only Middle Name gets '.' default
+            if 'middle' in col_lower and 'name' in col_lower:
+                df[col] = df[col].apply(
+                    lambda x: '.' if pd.isna(x) or x == '' or x == self.DEFAULT_VALUE else x
+                )
+            else:
+                # All other fields get empty string
+                df[col] = df[col].apply(
+                    lambda x: '' if pd.isna(x) or x == '' or x == self.DEFAULT_VALUE else x
+                )    
+            # Special handling for Emirates ID
+            if 'emirates' in col_lower and 'id' in col_lower:
+                df[col] = df[col].apply(self._process_emirates_id)
+        return df
                 
