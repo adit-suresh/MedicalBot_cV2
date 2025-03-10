@@ -164,6 +164,11 @@ class WorkflowTester:
             emails = self.outlook.fetch_emails()
             logger.info(f"Fetched {len(emails)} emails before filtering")
             
+            # Force deduplication
+            if not bypass_dedup:
+                emails = force_deduplication(emails)
+                logger.info(f"After force deduplication: {len(emails)} emails remain")
+            
             # Initialize email tracker
             from src.email_tracker.email_tracker import EmailTracker
             email_tracker = EmailTracker()
@@ -1058,19 +1063,25 @@ def run_validation(output_dir: str):
 
 def reset_processed_emails():
     """Reset the processed emails tracking file."""
-    files_to_reset = ["processed_emails.json", "processed_emails_manual.txt"]
-    for file in files_to_reset:
-        if os.path.exists(file):
-            try:
-                os.remove(file)
-                logger.info(f"Removed {file}")
-            except Exception as e:
-                logger.error(f"Error removing {file}: {str(e)}")
-    
-    # Create empty JSON file
-    with open("processed_emails.json", "w") as f:
-        f.write("{}")
-    logger.info("Reset processed emails tracking")
+    try:
+        # Remove JSON file
+        if os.path.exists("processed_emails.json"):
+            os.remove("processed_emails.json")
+            logger.info("Removed processed_emails.json file")
+            
+        # Create empty JSON file
+        with open("processed_emails.json", "w") as f:
+            f.write("{}")
+        logger.info("Created empty processed_emails.json file")
+        
+        # Also check for old file
+        if os.path.exists("processed_emails_manual.txt"):
+            os.remove("processed_emails_manual.txt")
+            logger.info("Removed processed_emails_manual.txt file")
+            
+        logger.info("Reset processed emails tracking")
+    except Exception as e:
+        logger.error(f"Error resetting email tracker: {str(e)}")
         
 def run_diagnostics():
     """Run diagnostics on document processing."""
@@ -1117,6 +1128,26 @@ def run_diagnostics():
     
     print_separator()
     logger.info(f"Diagnostics complete. Check {result.get('diagnostic_dir', 'logs')} for details")
+    
+def force_deduplication(emails, processed_file="processed_emails.json"):
+    """Force deduplication by directly checking the file."""
+    if not os.path.exists(processed_file):
+        return emails
+        
+    try:
+        with open(processed_file, 'r') as f:
+            processed = json.load(f)
+            processed_ids = set(processed.keys())
+            
+        original_count = len(emails)
+        emails = [e for e in emails if e.get('id') not in processed_ids]
+        
+        logger.info(f"Force deduplication: Removed {original_count - len(emails)} emails")
+        logger.info(f"Remaining emails: {[e.get('subject', 'No Subject') for e in emails]}")
+        return emails
+    except Exception as e:
+        logger.error(f"Error in force deduplication: {str(e)}")
+        return emails
     
 if __name__ == "__main__":
     # Parse command line arguments

@@ -135,6 +135,17 @@ class DataCombiner:
                                     extracted_data: Dict, excel_data: Any = None, document_paths: Dict[str, str] = None) -> Dict:
         logger.info(f"Starting data combination with template: {template_path}")
         logger.info(f"Extracted data has {len(extracted_data)} fields: {list(extracted_data.keys())}")
+        
+        # Early validation of inputs
+        if extracted_data is None:
+            extracted_data = {}
+            logger.warning("Extracted data is None, using empty dictionary")
+        
+        if document_paths is None:
+            document_paths = {}
+            logger.warning("Document paths is None, using empty dictionary")
+            
+        # Log excel data information
         if excel_data is not None:
             if isinstance(excel_data, pd.DataFrame):
                 logger.info(f"Excel data has {len(excel_data)} rows")
@@ -142,6 +153,8 @@ class DataCombiner:
                 logger.info(f"Excel data has {len(excel_data)} rows")
             elif isinstance(excel_data, dict):
                 logger.info(f"Excel data has 1 row with {len(excel_data)} fields")
+            else:
+                logger.warning(f"Excel data has unexpected type: {type(excel_data)}")
                 
         """Combine data with better handling of multiple rows."""
         start_time = time.time()
@@ -157,68 +170,112 @@ class DataCombiner:
             # Initialize field mappings
             field_mappings = {}
             
-            # Convert excel_data to DataFrame if needed
-            if excel_data is not None:
-                if isinstance(excel_data, dict):
-                    excel_data = pd.DataFrame([excel_data])
-                elif isinstance(excel_data, list):
-                    excel_data = pd.DataFrame(excel_data)
-                elif not isinstance(excel_data, pd.DataFrame):
-                    raise TypeError(f"Excel data must be DataFrame, dict, or list")
-            
-            # Process data with proper validation
-            if excel_data is not None:
-                if isinstance(excel_data, dict):
-                    excel_data = pd.DataFrame([excel_data])
-                elif isinstance(excel_data, list) and excel_data:
-                    excel_data = pd.DataFrame(excel_data)
-                elif not isinstance(excel_data, pd.DataFrame):
-                    logger.warning("Excel data has invalid type, treating as empty")
+            # Process excel_data with robust error handling
+            try:
+                # Validate and convert excel_data
+                if excel_data is not None:
+                    if isinstance(excel_data, dict):
+                        # Convert dictionary to DataFrame with a single row
+                        excel_data = pd.DataFrame([excel_data])
+                        logger.info("Converted dict to DataFrame with 1 row")
+                    elif isinstance(excel_data, list):
+                        if not excel_data:
+                            # Empty list
+                            logger.warning("Excel data is an empty list, using empty DataFrame")
+                            excel_data = pd.DataFrame()
+                        else:
+                            # Convert list to DataFrame
+                            excel_data = pd.DataFrame(excel_data)
+                            logger.info(f"Converted list with {len(excel_data)} items to DataFrame")
+                    elif not isinstance(excel_data, pd.DataFrame):
+                        # Invalid type
+                        logger.warning(f"Excel data has invalid type {type(excel_data)}, using empty DataFrame")
+                        excel_data = pd.DataFrame()
+                else:
+                    # None value
+                    logger.info("Excel data is None, using empty DataFrame")
                     excel_data = pd.DataFrame()
-
-            # Handle empty DataFrames properly
-            if excel_data is not None and not excel_data.empty:
-                logger.info(f"Processing {len(excel_data)} rows with document data")
-                result_df = self._process_multiple_rows(extracted_data, excel_data, 
+            except Exception as e:
+                logger.error(f"Error processing excel_data: {str(e)}", exc_info=True)
+                excel_data = pd.DataFrame()  # Use empty DataFrame on error
+            
+            # Process data based on what we have
+            try:
+                if not excel_data.empty:
+                    logger.info(f"Processing {len(excel_data)} rows with document data")
+                    result_df = self._process_multiple_rows(extracted_data, excel_data, 
                                                     template_columns, field_mappings, document_paths)
-            else:
-                logger.info("Using document data only")
-                result_df = self._process_single_row(extracted_data, template_columns, 
+                else:
+                    logger.info("Using document data only")
+                    result_df = self._process_single_row(extracted_data, template_columns, 
                                                 field_mappings, document_paths)
+            except Exception as e:
+                logger.error(f"Error in data processing: {str(e)}", exc_info=True)
+                # Fall back to creating a simple dataframe with just the extracted data
+                logger.info("Falling back to basic data processing")
+                simple_data = {}
+                # Add extracted data fields that match template columns
+                for field, value in extracted_data.items():
+                    norm_field = self._normalize_field_name(field)
+                    # Check if field directly matches a template column or its normalized form
+                    if field in template_columns or norm_field in [self._normalize_column_name(col) for col in template_columns]:
+                        simple_data[field] = value
+                
+                # Create a DataFrame with the simple data
+                result_df = pd.DataFrame([simple_data])
                 
             # Save results
-            output_dir = os.path.dirname(output_path)
-            if output_dir:
-                os.makedirs(output_dir, exist_ok=True)
+            try:
+                output_dir = os.path.dirname(output_path)
+                if output_dir:
+                    os.makedirs(output_dir, exist_ok=True)
+                    
+                # Final cleanup of date formats
+                date_fields = ['effective_date', 'dob', 'passport_expiry_date', 'visa_expiry_date']
+                for field in date_fields:
+                    if field in result_df.columns:
+                        result_df[field] = result_df[field].apply(
+                            lambda x: self._format_date_value(x) if pd.notna(x) else self.DEFAULT_VALUE
+                        )
                 
-            # Final cleanup of date formats
-            date_fields = ['effective_date', 'dob', 'passport_expiry_date', 'visa_expiry_date']
-            for field in date_fields:
-                if field in result_df.columns:
-                    result_df[field] = result_df[field].apply(
-                        lambda x: self._format_date_value(x) if pd.notna(x) else self.DEFAULT_VALUE
-                    )
-            
-            # Apply special formatting for default values
-            result_df = self._format_fields_for_output(result_df)
-            
-            # Save to Excel
-            result_df.to_excel(output_path, index=False)
-            
-            processing_time = time.time() - start_time
-            logger.info(f"Data combined successfully in {processing_time:.2f}s: "
-                    f"{len(result_df)} rows, {len(template_columns)} columns")
-            
-            return {
-                'status': 'success',
-                'output_path': output_path,
-                'rows_processed': len(result_df),
-                'processing_time': processing_time,
-                'field_mappings': field_mappings
-            }
+                # Apply special formatting for default values
+                if hasattr(self, '_format_fields_for_output'):
+                    result_df = self._format_fields_for_output(result_df)
+                else:
+                    # Fallback if method doesn't exist
+                    for col in result_df.columns:
+                        col_lower = col.lower()
+                        # Only Middle Name gets '.' default
+                        if col_lower == 'middle_name' or col == 'Middle Name':
+                            result_df[col] = result_df[col].apply(
+                                lambda x: '.' if pd.isna(x) or x == '' or x == self.DEFAULT_VALUE else x
+                            )
+                        else:
+                            # All other fields get empty string
+                            result_df[col] = result_df[col].apply(
+                                lambda x: '' if pd.isna(x) or x == '' or x == self.DEFAULT_VALUE else x
+                            )
+                
+                # Save to Excel
+                result_df.to_excel(output_path, index=False)
+                
+                processing_time = time.time() - start_time
+                logger.info(f"Data combined successfully in {processing_time:.2f}s: "
+                        f"{len(result_df)} rows, {len(template_columns)} columns")
+                
+                return {
+                    'status': 'success',
+                    'output_path': output_path,
+                    'rows_processed': len(result_df),
+                    'processing_time': processing_time,
+                    'field_mappings': field_mappings
+                }
+            except Exception as e:
+                logger.error(f"Error saving results: {str(e)}", exc_info=True)
+                raise ServiceError(f"Failed to save combined data: {str(e)}")
             
         except Exception as e:
-            logger.error(f"Error combining data: {str(e)}")
+            logger.error(f"Error combining data: {str(e)}", exc_info=True)
             raise ServiceError(f"Data combination failed: {str(e)}")
 
     @lru_cache(maxsize=10)
@@ -867,7 +924,7 @@ class DataCombiner:
         for col in df.columns:
             col_lower = col.lower()
             # Only Middle Name gets '.' default
-            if 'middle' in col_lower and 'name' in col_lower:
+            if col_lower == 'middle_name' or col == 'Middle Name':
                 df[col] = df[col].apply(
                     lambda x: '.' if pd.isna(x) or x == '' or x == self.DEFAULT_VALUE else x
                 )

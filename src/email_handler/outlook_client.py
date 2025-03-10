@@ -166,7 +166,7 @@ class OutlookClient:
         If last_check_time is provided, it is used directly; otherwise, the method
         will attempt to fetch emails from these incremental time windows:
         - Last 1 hour
-        - Last 3 hours
+        - Last 24 hours
         - Last 5 day
         
         Returns:
@@ -196,8 +196,8 @@ class OutlookClient:
                 return []
             else:
                 now = datetime.now()
-                # Define incremental time windows: last hour, last 3 hours, last 5 days.
-                time_windows = [now - timedelta(hours=1), now - timedelta(hours=3), now - timedelta(days=5)]
+                # Define incremental time windows: last hour, last 24 hours, last 5 days.
+                time_windows = [now - timedelta(hours=1), now - timedelta(hours=24), now - timedelta(days=5)]
                 for window in time_windows:
                     logger.info(f"Trying to fetch emails since {window.isoformat()}...")
                     emails = self._fetch_emails_with_last_check(window)
