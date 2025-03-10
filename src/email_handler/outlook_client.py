@@ -180,7 +180,7 @@ class OutlookClient:
         else:
             now = datetime.now()
             # Define incremental time windows: last hour, last day, last week.
-            time_windows = [now - timedelta(hours=1), now - timedelta(hours=24), now - timedelta(days=3)]
+            time_windows = [now - timedelta(hours=1), now - timedelta(hours=3), now - timedelta(days=5)]
             for window in time_windows:
                 logger.info(f"Trying to fetch emails since {window.isoformat()}...")
                 emails = self._fetch_emails_with_last_check(window)
@@ -434,39 +434,47 @@ class OutlookClient:
         return params
         
     def _filter_emails(self, emails: List[Dict]) -> List[Dict]:
-        """Apply additional client-side filtering to emails.
-        
-        This provides finer-grained control over email filtering that
-        might not be possible with OData queries.
-        
-        Args:
-            emails: List of emails to filter
-            
-        Returns:
-            Filtered list of emails
-        """
+        """Apply additional client-side filtering to emails."""
         filtered_emails = []
+        skipped_emails = []
         
         for email in emails:
-            # Skip emails without attachments (though the server filter should catch this)
+            subject = email.get('subject', '').lower()
+            
+            # Check subject for debugging
+            logger.info(f"Checking email with subject: '{subject}'")
+            
+            # Skip emails without attachments
             if not email.get('hasAttachments', False):
+                logger.info(f"  - Skipped: No attachments")
+                skipped_emails.append({"subject": subject, "reason": "No attachments"})
                 continue
             
-            subject = email.get('subject', '').lower()
-            if any(keyword.lower() in subject for keyword in SUBJECT_KEYWORDS):
-                filtered_emails.append(email)
-                
             # Check for keywords in subject
-            subject = email.get('subject', '').lower()
             if not any(keyword.lower() in subject for keyword in SUBJECT_KEYWORDS):
+                logger.info(f"  - Skipped: No matching keywords in subject")
+                skipped_emails.append({"subject": subject, "reason": "No matching keywords"})
                 continue
                 
             # Only keep high and normal importance emails
             importance = email.get('importance', 'normal')
             if importance == 'low':
+                logger.info(f"  - Skipped: Low importance")
+                skipped_emails.append({"subject": subject, "reason": "Low importance"})
                 continue
                 
+            logger.info(f"  - Kept: Passed all filters")
             filtered_emails.append(email)
+        
+        # Log summary
+        logger.info(f"Email filtering: {len(filtered_emails)} kept, {len(skipped_emails)} skipped")
+        
+        # Save skipped emails for analysis
+        try:
+            with open("skipped_emails.json", "w") as f:
+                json.dump(skipped_emails, f, indent=2)
+        except Exception:
+            pass
             
         return filtered_emails
 

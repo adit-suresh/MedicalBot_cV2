@@ -99,8 +99,8 @@ class DataCombiner:
         Process Emirates ID with special handling.
         If it doesn't start with 784, replace with default value.
         """
-        if value == self.DEFAULT_VALUE:
-            return self.DEFAULT_VALUE
+        if value is None or pd.isna(value) or value == '' or value == self.DEFAULT_VALUE:
+            return ''
             
         # First clean the value
         cleaned = re.sub(r'[^0-9-]', '', str(value))
@@ -111,6 +111,7 @@ class DataCombiner:
         
         # Check if it starts with 784 (after format standardization)
         if not cleaned.startswith('784'):
+            logger.info(f"Emirates ID '{cleaned}' doesn't start with 784, using default ID")
             return '111-1111-1111111-1'
         
         return cleaned
@@ -166,15 +167,33 @@ class DataCombiner:
                 elif not isinstance(excel_data, pd.DataFrame):
                     raise TypeError(f"Excel data must be DataFrame, dict, or list")
             
-            # Process data
-            if excel_data is not None and not excel_data.empty:
-                logger.info(f"Processing {len(excel_data)} rows with document data")
-                result_df = self._process_multiple_rows(extracted_data, excel_data, 
-                                                    template_columns, field_mappings, document_paths)
-            else:
-                logger.info("Using document data only")
-                result_df = self._process_single_row(extracted_data, template_columns, 
-                                                field_mappings, document_paths)
+            # Process data with additional error checking
+            try:
+                if excel_data is not None:
+                    if isinstance(excel_data, pd.DataFrame) and not excel_data.empty:
+                        logger.info(f"Processing {len(excel_data)} rows with document data")
+                        result_df = self._process_multiple_rows(extracted_data, excel_data, 
+                                                            template_columns, field_mappings, document_paths)
+                    elif isinstance(excel_data, list) and excel_data:
+                        logger.info(f"Processing {len(excel_data)} rows (list) with document data")
+                        excel_df = pd.DataFrame(excel_data)
+                        result_df = self._process_multiple_rows(extracted_data, excel_df, 
+                                                            template_columns, field_mappings, document_paths)
+                    else:
+                        logger.warning("Excel data is empty or None, using document data only")
+                        result_df = self._process_single_row(extracted_data, template_columns, 
+                                                        field_mappings, document_paths)
+                else:
+                    logger.info("No Excel data, using document data only")
+                    result_df = self._process_single_row(extracted_data, template_columns, 
+                                                    field_mappings, document_paths)
+            except Exception as e:
+                logger.error(f"Error processing data: {str(e)}", exc_info=True)
+                # Fall back to creating a simple dataframe with just the extracted data
+                logger.info("Falling back to basic data processing")
+                simple_data = {field: value for field, value in extracted_data.items() 
+                            if field in template_columns or any(field == self._normalize_field_name(col) for col in template_columns)}
+                result_df = pd.DataFrame([simple_data])
                 
             # Save results
             output_dir = os.path.dirname(output_path)
@@ -188,6 +207,9 @@ class DataCombiner:
                     result_df[field] = result_df[field].apply(
                         lambda x: self._format_date_value(x) if pd.notna(x) else self.DEFAULT_VALUE
                     )
+                    
+            # Apply final cleaning to remove default values except for middle name
+            result_df = self._clean_final_dataframe(result_df)
             
             # Save to Excel
             result_df.to_excel(output_path, index=False)
@@ -673,29 +695,47 @@ class DataCombiner:
         # Replace NaN/None with default value
         df = df.fillna(self.DEFAULT_VALUE)
         
-        # Ensure all columns are strings
+        # Process each column
         for col in df.columns:
-            df[col] = df[col].astype(str)
-            
-            # Apply normalization based on field type
             normalized_col = self._normalize_column_name(col)
             
-            # Handle date fields
-            if normalized_col in self._date_fields:
-                df[col] = df[col].apply(self._format_date_value)
-                
-            # Handle numeric fields
-            elif normalized_col in self._numeric_fields:
+            # Convert to string first
+            df[col] = df[col].astype(str)
+            
+            # Only Middle Name should have '.' default
+            if normalized_col == 'middle_name':
                 df[col] = df[col].apply(
-                    lambda x: self._format_numeric_value(x) if x != self.DEFAULT_VALUE else x
+                    lambda x: self.DEFAULT_VALUE if pd.isna(x) or x == '' or x == self.DEFAULT_VALUE else x
+                )
+            else:
+                # All other columns should be empty if they have the default value
+                df[col] = df[col].apply(
+                    lambda x: '' if pd.isna(x) or x == '' or x == self.DEFAULT_VALUE else x
+                )
+            
+            # Handle date fields with special formatting
+            if normalized_col in self._date_fields and df[col].any():
+                df[col] = df[col].apply(
+                    lambda x: self._format_date_value(x) if x and x != '' else x
+                )
+                
+            # Handle numeric fields with special formatting
+            elif normalized_col in self._numeric_fields and df[col].any():
+                df[col] = df[col].apply(
+                    lambda x: self._format_numeric_value(x) if x and x != '' else x
                 )
                 
             # Clean up strings (remove excess whitespace)
             else:
                 df[col] = df[col].apply(
-                    lambda x: re.sub(r'\s+', ' ', x).strip() if x != self.DEFAULT_VALUE else x
+                    lambda x: re.sub(r'\s+', ' ', x).strip() if x and x != '' else x
                 )
-                
+        
+        # Make sure Emirates ID is properly formatted
+        if 'emirates_id' in [self._normalize_column_name(col) for col in df.columns]:
+            eid_col = next(col for col in df.columns if self._normalize_column_name(col) == 'emirates_id')
+            df[eid_col] = df[eid_col].apply(self._process_emirates_id)
+        
         return df
 
     def _normalize_column_name(self, column: str) -> str:

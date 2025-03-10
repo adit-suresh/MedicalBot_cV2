@@ -4,6 +4,7 @@ import os
 from typing import Dict, List, Optional, Tuple, Any
 import re
 from datetime import datetime
+import json
 import hashlib
 import concurrent.futures
 from botocore.exceptions import ClientError
@@ -1040,3 +1041,37 @@ class TextractProcessor:
                 logger.warning(f"Missing required fields for {doc_type}: {missing}")
         
         return verified
+    
+    def debug_textract_results(self, file_path: str, doc_type: str) -> None:
+        """Debug helper to see raw Textract output"""
+        try:
+            file_bytes = self._read_file_bytes(file_path)
+            response = self.textract.analyze_document(
+                Document={'Bytes': file_bytes},
+                FeatureTypes=['FORMS', 'TABLES']
+            )
+            
+            # Create debug output directory
+            debug_dir = os.path.join(os.path.dirname(file_path), "textract_debug")
+            os.makedirs(debug_dir, exist_ok=True)
+            
+            # Save raw response
+            debug_file = os.path.join(debug_dir, f"{os.path.basename(file_path)}_textract_debug.json")
+            with open(debug_file, 'w') as f:
+                json.dump(response, f, indent=2, default=str)
+                
+            # Extract and log all text
+            all_text = ""
+            for block in response['Blocks']:
+                if block['BlockType'] == 'LINE':
+                    all_text += block.get('Text', '') + "\n"
+                    
+            text_file = os.path.join(debug_dir, f"{os.path.basename(file_path)}_text.txt")
+            with open(text_file, 'w') as f:
+                f.write(all_text)
+                
+            logger.info(f"Saved Textract debug info to {debug_file} and {text_file}")
+            return all_text
+        except Exception as e:
+            logger.error(f"Error in debug_textract_results: {str(e)}")
+            return None

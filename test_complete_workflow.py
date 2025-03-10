@@ -11,6 +11,7 @@ from typing import Dict, Optional, List
 import json
 import argparse
 import shutil
+import time
 
 # Add project root to Python path
 project_root = os.path.dirname(os.path.abspath(__file__))
@@ -167,30 +168,77 @@ class WorkflowTester:
             from src.email_tracker.email_tracker import EmailTracker
             email_tracker = EmailTracker()
             
+            # Check tracker file integrity
+            processed_ids = set()
+            try:
+                if os.path.exists("processed_emails.json"):
+                    with open("processed_emails.json", "r") as f:
+                        try:
+                            processed_data = json.load(f)
+                            for email_id in processed_data:
+                                processed_ids.add(email_id)
+                            logger.info(f"Loaded {len(processed_ids)} processed email IDs from tracking file")
+                        except json.JSONDecodeError:
+                            logger.error("Error parsing processed_emails.json, treating as empty")
+                            # Create a backup of the corrupted file
+                            import shutil
+                            backup_name = f"processed_emails.json.corrupted.{int(time.time())}"
+                            shutil.copy2("processed_emails.json", backup_name)
+                            logger.info(f"Created backup of corrupted file: {backup_name}")
+                            # Create a new empty file
+                            with open("processed_emails.json", "w") as f_new:
+                                f_new.write("{}")
+            except Exception as e:
+                logger.error(f"Error loading processed email IDs: {str(e)}")
+            
+            # Examine subjects for debugging
+            subjects_found = [email.get('subject', '').strip() for email in emails]
+            logger.info(f"Found emails with subjects: {subjects_found}")
+
             # Log each email we're going to process
             for idx, email in enumerate(emails, 1):
                 email_id = email['id']
                 subject = email.get('subject', '').strip()
-                is_processed = email_tracker.is_processed(email_id)
+                # Check both methods
+                is_processed_tracker = email_tracker.is_processed(email_id)
+                is_processed_direct = email_id in processed_ids
+                
+                if is_processed_tracker != is_processed_direct:
+                    logger.warning(f"Inconsistent tracking state for email {email_id}: tracker={is_processed_tracker}, direct={is_processed_direct}")
+                    
+                is_processed = is_processed_tracker or is_processed_direct
+                
                 logger.info(f"Email {idx}: ID={email_id}, Subject={subject}")
+                logger.info(f"  - Is processed (tracker): {is_processed_tracker}")
+                logger.info(f"  - Is processed (direct): {is_processed_direct}")
                 
                 if not bypass_dedup and is_processed:
                     logger.info(f"  - Status: Will be skipped (already processed)")
                 else:
                     logger.info(f"  - Status: Will be processed")
             
+            # Check if --reset flag was used but didn't clear the tracker
+            if bypass_dedup and len(processed_ids) > 0:
+                logger.warning(f"Reset flag was used but {len(processed_ids)} processed emails still in tracker")
+                
             results = []
             successful = 0
             skipped = 0
             failed = 0
+            failed_emails = []  # Track details of failed emails
             
             for email in emails:
                 try:
                     email_id = email['id']
                     subject = email.get('subject', '').strip()
                     
+                    # Double-check processing status
+                    is_processed_tracker = email_tracker.is_processed(email_id)
+                    is_processed_direct = email_id in processed_ids
+                    is_processed = is_processed_tracker or is_processed_direct
+                    
                     # Skip if already processed (unless bypassing)
-                    if not bypass_dedup and email_tracker.is_processed(email_id):
+                    if not bypass_dedup and is_processed:
                         logger.info(f"Skipping already processed email: {subject}")
                         skipped += 1
                         continue
@@ -217,18 +265,44 @@ class WorkflowTester:
                                     'documents_processed': list(result.get('documents', {}).keys())
                                 }
                                 email_tracker.mark_processed(email_id, metadata)
+                                # Also update our direct tracking set
+                                processed_ids.add(email_id)
                         else:
                             logger.error(f"Failed to process email: {subject}, Error: {result.get('error', 'Unknown error')}")
                             failed += 1
+                            failed_emails.append({
+                                'id': email_id,
+                                'subject': subject,
+                                'error': result.get('error', 'Unknown error'),
+                                'received': email.get('receivedDateTime', 'Unknown')
+                            })
                             
                     except Exception as e:
                         logger.error(f"Uncaught exception processing email {subject}: {str(e)}", exc_info=True)
                         failed += 1
+                        failed_emails.append({
+                            'id': email_id,
+                            'subject': subject,
+                            'error': str(e),
+                            'received': email.get('receivedDateTime', 'Unknown')
+                        })
                         
                 except Exception as e:
                     logger.error(f"Error accessing email information: {str(e)}", exc_info=True)
                     failed += 1
+                    failed_emails.append({
+                        'id': email.get('id', 'Unknown'),
+                        'subject': email.get('subject', 'Unknown'),
+                        'error': str(e),
+                        'received': email.get('receivedDateTime', 'Unknown')
+                    })
                     continue
+            
+            # Save failed emails info to file for inspection
+            if failed_emails:
+                with open('failed_emails_debug.json', 'w') as f:
+                    json.dump(failed_emails, f, indent=2, default=str)
+                logger.info(f"Saved details of {len(failed_emails)} failed emails to failed_emails_debug.json")
             
             logger.info(f"Email processing summary:")
             logger.info(f"  - Total emails: {len(emails)}")
@@ -242,6 +316,13 @@ class WorkflowTester:
                 "successful": successful,
                 "skipped": skipped,
                 "failed": failed
+            }
+
+        except Exception as e:
+            logger.error(f"Workflow failed: {str(e)}")
+            return {
+                "status": "error",
+                "error": str(e)
             }
 
         except Exception as e:
@@ -315,6 +396,15 @@ class WorkflowTester:
             try:
                 logger.info(f"Processing {len(document_paths)} documents")
                 extracted_data = {}
+                
+                # Debug: Add Textract debugging before processing
+                for doc_type, file_path in document_paths.items():
+                    try:
+                        logger.info(f"Debugging Textract for {doc_type}: {file_path}")
+                        debug_text = self.textract.debug_textract_results(file_path, doc_type)
+                        logger.info(f"Completed Textract debugging for {doc_type}")
+                    except Exception as e:
+                        logger.error(f"Error in Textract debugging for {doc_type}: {str(e)}")
                 
                 # Process Emirates ID first if available (usually most reliable)
                 for doc_type, file_path in sorted(document_paths.items(), 
@@ -422,17 +512,28 @@ class WorkflowTester:
                 try:
                     zip_path = self._create_zip(submission_dir)
                     
+                    # Create message body with local file path
+                    email_body = (
+                        f"New submission processed: {subject}\n\n"
+                        f"Please find the attached ZIP file containing all processed documents.\n\n"
+                        f"Local file location: {zip_path}\n"
+                    )
+                    
                     # Send email with attachment
                     email_sent = self.email_sender.send_email(
                         subject=f"Medical Bot: {subject} - Submission Complete",
-                        body=f"New submission processed: {subject}\n\nPlease find the attached ZIP file containing all processed documents.",
+                        body=email_body,
                         attachment_path=zip_path
                     )
                     
                     if email_sent:
                         logger.info(f"Email sent with submission ZIP: {zip_path}")
+                        logger.info(f"Files are also available locally at: {zip_path}")
+                        print(f"\n✅ SUBMISSION COMPLETE!\nProcessed files are available at:\n{zip_path}\n")
                     else:
                         logger.error("Failed to send email with submission")
+                        logger.info(f"Files are available locally at: {zip_path}")
+                        print(f"\n⚠️ Email sending failed, but files are available at:\n{zip_path}\n")
                         
                 except Exception as e:
                     logger.error(f"Error creating or sending submission: {str(e)}", exc_info=True)      
@@ -496,7 +597,51 @@ class WorkflowTester:
             # Create a copy of document paths to update
             updated_paths = {}
             
-            # Process each document
+            # Create direct one-to-one mapping if appropriate
+            if len(document_paths) == len(excel_data) and len(document_paths) > 0:
+                logger.info(f"Equal number of documents ({len(document_paths)}) and rows ({len(excel_data)}), using direct mapping")
+                sorted_docs = sorted(document_paths.items())
+                sorted_excel = sorted(excel_data, key=lambda x: x.get('staff_id', ''))
+                
+                for i, ((doc_type, file_path), row_data) in enumerate(zip(sorted_docs, sorted_excel)):
+                    staff_id = str(row_data.get('staff_id', '')).strip()
+                    if not staff_id or staff_id == '.':
+                        logger.warning(f"Missing staff_id in row {i+1}, using row index")
+                        staff_id = f"UNKNOWN_{i+1}"
+                    
+                    file_dir = os.path.dirname(file_path)
+                    file_ext = os.path.splitext(file_path)[1]
+                    
+                    # Determine document type suffix
+                    if 'passport' in doc_type.lower():
+                        doc_suffix = "PASSPORT"
+                    elif 'emirates' in doc_type.lower() or 'eid' in doc_type.lower():
+                        doc_suffix = "EMIRATES_ID"
+                    elif 'visa' in doc_type.lower() or 'permit' in doc_type.lower():
+                        doc_suffix = "VISA"
+                    else:
+                        doc_suffix = doc_type.upper().replace(' ', '_')
+                    
+                    # Create new filename with staff ID and doc type
+                    safe_id = re.sub(r'[<>:"/\\|?*]', '_', staff_id)
+                    new_name = f"{safe_id}_{doc_suffix}{file_ext}"
+                    new_path = os.path.join(file_dir, new_name)
+                    
+                    # Handle potential conflicts
+                    if os.path.exists(new_path) and os.path.abspath(new_path) != os.path.abspath(file_path):
+                        import uuid
+                        unique = str(uuid.uuid4())[:8]
+                        new_name = f"{safe_id}_{doc_suffix}_{unique}{file_ext}"
+                        new_path = os.path.join(file_dir, new_name)
+                    
+                    # Rename file
+                    os.rename(file_path, new_path)
+                    logger.info(f"Renamed file: {os.path.basename(file_path)} -> {new_name}")
+                    updated_paths[doc_type] = new_path
+                
+                return updated_paths
+            
+            # Process each document using the regular matching approach
             for doc_type, file_path in document_paths.items():
                 try:
                     # Skip if file doesn't exist
@@ -734,7 +879,7 @@ def print_separator():
     """Print a separator line for better readability."""
     logger.info("=" * 80)
 
-def run_test():
+def run_test(reset=False):
     """Run the workflow test."""
     print_separator()
     logger.info("STARTING WORKFLOW TEST")
@@ -743,8 +888,17 @@ def run_test():
     # Initialize workflow tester
     tester = WorkflowTester()
     
+    # Reset email tracker if requested
+    if reset:
+        from src.email_tracker.email_tracker import EmailTracker
+        tracker = EmailTracker()
+        if tracker.reset_tracker():
+            logger.info("Successfully reset email tracker")
+        else:
+            logger.warning("Failed to reset email tracker")
+    
     # Run workflow
-    result = tester.run_complete_workflow()
+    result = tester.run_complete_workflow(bypass_dedup=reset)
     
     # Print results
     print_separator()
@@ -904,21 +1058,26 @@ def run_validation(output_dir: str):
 
 def reset_processed_emails():
     """Reset the processed emails tracking file."""
-    if os.path.exists("processed_emails.json"):
-        os.remove("processed_emails.json")
-        logger.info("Removed processed_emails.json file")
-
-if __name__ == "__main__":
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Test complete workflow')
-    parser.add_argument('--reset', action='store_true', help='Reset processed emails tracking')
-    parser.add_argument('--validate', metavar='DIR', help='Validate output files in directory')
-    args = parser.parse_args()
-    
-    if args.reset:
-        reset_processed_emails()
-    
-    if args.validate:
-        run_validation(args.validate)
-    else:
-        run_test()
+    try:
+        from src.email_tracker.email_tracker import EmailTracker
+        tracker = EmailTracker()
+        if tracker.reset_tracker():
+            logger.info("Successfully reset email tracker")
+        else:
+            logger.warning("Failed to reset email tracker")
+            
+        # For backward compatibility, also check for old file
+        if os.path.exists("processed_emails_manual.txt"):
+            os.remove("processed_emails_manual.txt")
+            logger.info("Removed processed_emails_manual.txt file")
+    except Exception as e:
+        logger.error(f"Error resetting email tracker: {str(e)}")
+        
+        # Fallback: directly remove the files
+        for file in ["processed_emails.json", "processed_emails_manual.txt"]:
+            if os.path.exists(file):
+                try:
+                    os.remove(file)
+                    logger.info(f"Removed {file}")
+                except Exception:
+                    pass
