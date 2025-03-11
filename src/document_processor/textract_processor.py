@@ -591,7 +591,7 @@ class TextractProcessor:
         return data
 
     def _extract_visa_data(self, text_content: str) -> Dict[str, str]:
-        """Extract visa specific data with enhanced pattern matching."""
+        """Extract visa specific data with enhanced pattern matching for critical fields."""
         data = {
             'entry_permit_no': self.DEFAULT_VALUE,
             'unified_no': self.DEFAULT_VALUE,
@@ -612,43 +612,55 @@ class TextractProcessor:
         text = re.sub(r'\s+', ' ', text_content)
         text_upper = text.upper()
         
-        # Add specific patterns for E-Visa format
-        # Example:
+        # NATIONALITY - enhanced patterns
+        nationality_patterns = [
+            r'NATIONALITY\s*[:\.]*\s*([A-Za-z\s]+?)(?=\s*\n|\s*$|\s*\d)',
+            r'NATIONALITY\s*[:\.]*\s*([A-Za-z\s]+)',
+            r'NATIONALTY\s*[:\.]*\s*([A-Za-z\s]+)',  # Common misspelling
+            r'NATION[.:]\s*([A-Za-z\s]+?)(?=\s*\n|\s*$)'
+        ]
+        
+        for pattern in nationality_patterns:
+            match = re.search(pattern, text_upper)
+            if match:
+                nationality = match.group(1).strip()
+                data['nationality'] = nationality
+                logger.debug(f"Extracted nationality: {nationality}")
+                break
+        
+        # UNIFIED NUMBER - more robust patterns
         unified_patterns = [
+            r'U[\.\s]*I[\.\s]*D[\.\s]*(?:NO|NUMBER)[\.\s]*[:]*\s*(\d[\d\s]*)',
             r'(?:U\.?I\.?D\.?\s*No\.?|UNIFIED\s*(?:NO|NUMBER))[.:\s]*(\d[\d\s/]*)',
             r'(?<!\w)U\.?I\.?D\.?\s*[:#]?\s*(\d[\d\s/]*)',
             r'UNIFIED\s*(?:NO|NUMBER)[.:\s]*([0-9\s]{5,15})',
+            r'UID\s*[:\.#]*\s*(\d[\d\s]*)',
             r'(?<!\w)(2\d{9})(?!\w)',  # Unified numbers often start with 2 and have 10 digits
             r'(?:\s|^)(3\d{9})(?:\s|$)'  # Try similar pattern for 3-prefix
         ]
         
         for pattern in unified_patterns:
-            match = re.search(pattern, text_content, re.IGNORECASE)
+            match = re.search(pattern, text_upper)
             if match:
                 # Clean up the value (remove spaces, etc.)
                 unified_no = re.sub(r'\s', '', match.group(1))
                 data['unified_no'] = unified_no
-                break
-            
-        for pattern in unified_patterns:
-            match = re.search(pattern, text_content, re.IGNORECASE)
-            if match:
-                # Clean up the value (remove spaces, etc.)
-                unified_no = re.sub(r'\s', '', match.group(1))
-                data['unified_no'] = unified_no
+                logger.debug(f"Extracted unified number: {unified_no}")
                 break
         
-        # More aggressive visa file number extraction
+        # ENTRY PERMIT NUMBER / VISA FILE NUMBER - enhanced patterns
         visa_file_patterns = [
-            r'Visa\s+File\s+No[.:\s]*([0-9/\-\s]+)',
-            r'File\s+No[.:\s]*([0-9/\-\s]+)',
-            r'(?<!\w)(\d{3}/\d{4}/\d{4,10})(?!\w)', # Common format like 101/2023/1234567
-            r'(?<!\w)(\d{3}-\d{4}-\d{4,10})(?!\w)', # With dashes instead of slashes
-            r'(?<!\w)([0-9]{3}[\s/\-][0-9]{4}[\s/\-][0-9]{4,10})(?!\w)'
+            r'ENTRY\s+PERMIT\s+(?:NO|NUMBER)[\.\s]*[:]*\s*([0-9/\-\s]+)',
+            r'PERMIT\s+(?:NO|NUMBER)[\.\s]*[:]*\s*([0-9/\-\s]+)',
+            r'VISA\s+FILE\s+(?:NO|NUMBER)[\.\s]*[:]*\s*([0-9/\-\s]+)',
+            r'FILE\s+(?:NO|NUMBER)[\.\s]*[:]*\s*([0-9/\-\s]+)',
+            r'(?<!\w)(\d{3}[/\-]\d{4}[/\-]\d{4,10})(?!\w)',  # Common format like 101/2023/1234567
+            r'(?<!\w)(\d{3}\s*/\s*\d{4}\s*/\s*\d{4,10})(?!\w)',  # With spacing
+            r'(?<!\w)(\d{3}[-\s]/\s*\d{4}[-\s]/\s*\d{4,10})(?!\w)'  # Mixed delimiters
         ]
         
         for pattern in visa_file_patterns:
-            match = re.search(pattern, text_content, re.IGNORECASE)
+            match = re.search(pattern, text_upper)
             if match:
                 # Clean up the value
                 visa_file = re.sub(r'\s', '', match.group(1))
@@ -656,9 +668,27 @@ class TextractProcessor:
                 # Also use as entry permit if that's missing
                 if data['entry_permit_no'] == self.DEFAULT_VALUE:
                     data['entry_permit_no'] = visa_file
+                logger.debug(f"Extracted visa file/entry permit number: {visa_file}")
                 break
         
-        # Entry permit/visa number
+        # If no match found with specific patterns, try broader patterns
+        if data['visa_file_number'] == self.DEFAULT_VALUE:
+            broader_patterns = [
+                r'(?<!\w)(\d{3}[\s/\-]\d{4}[\s/\-]\d+)(?!\w)',
+                r'(?<!\w)(\d{1,3}[\s/\-]\d{1,4}[\s/\-]\d{4,})(?!\w)'
+            ]
+            
+            for pattern in broader_patterns:
+                matches = re.findall(pattern, text_upper)
+                if matches:
+                    # Take the first match that looks plausible
+                    visa_file = re.sub(r'\s', '', matches[0])
+                    data['visa_file_number'] = visa_file
+                    data['entry_permit_no'] = visa_file
+                    logger.debug(f"Extracted visa file number from broader pattern: {visa_file}")
+                    break
+        
+        # Entry permit/visa number - original patterns
         permit_patterns = [
             r'Entry\s+permit\s+(?:no|number)[.:\s]*([A-Z0-9\s/\-]+)(?=\s*\n|\s*$)',
             r'Permit\s+(?:no|number)[.:\s]*([A-Z0-9\s/\-]+)(?=\s*\n|\s*$)',
@@ -666,12 +696,17 @@ class TextractProcessor:
             r'(?:no|number)[.:\s]*(\d+\s*\/\s*\d+\s*\/\s*[\d\/]+)(?=\s*\n|\s*$)'
         ]
         
-        for pattern in permit_patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                data['entry_permit_no'] = self._clean_text(match.group(1))
-                break
-                
+        # Only use these patterns if we haven't found a value yet
+        if data['entry_permit_no'] == self.DEFAULT_VALUE:
+            for pattern in permit_patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    data['entry_permit_no'] = self._clean_text(match.group(1))
+                    # Also update visa_file_number if it's not set
+                    if data['visa_file_number'] == self.DEFAULT_VALUE:
+                        data['visa_file_number'] = data['entry_permit_no']
+                    break
+                    
         # Full name - try various patterns
         name_patterns = [
             r'Full Name[.:\s]*([A-Za-z\s]+?)(?=\s*\n|\s*$)',
@@ -694,16 +729,19 @@ class TextractProcessor:
                 data['full_name'] = ' '.join(unique_parts)
                 break
                 
-        # Nationality
-        nationality_match = re.search(r'Nationality[.:\s]*([A-Za-z\s]+?)(?=\s*\n|\s*$)', text, re.IGNORECASE)
-        if nationality_match:
-            data['nationality'] = self._clean_text(nationality_match.group(1))
-            
         # Passport number
-        passport_match = re.search(r'Passport(?:\s+No)?[.:\s]*([A-Z0-9]+)(?=\s*\n|\s*$)', text, re.IGNORECASE)
-        if passport_match:
-            data['passport_number'] = passport_match.group(1).strip()
-            
+        passport_patterns = [
+            r'Passport(?:\s+No)?[.:\s]*([A-Z0-9]+)(?=\s*\n|\s*$)',
+            r'Passport\s*(?:Number|No\.?)[.:\s]*([A-Z0-9]+)',
+            r'(?<!\w)([A-Z][0-9]{6,9})(?!\w)'  # Common format like A1234567
+        ]
+        
+        for pattern in passport_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                data['passport_number'] = match.group(1).strip()
+                break
+                
         # Date of birth - try multiple formats
         dob_patterns = [
             r'(?:Date of Birth|DOB)[.:\s]*(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})',
@@ -765,6 +803,12 @@ class TextractProcessor:
             if match:
                 data['visa_type'] = self._clean_text(match.group(1))
                 break
+
+        # Log extracted key fields for debugging
+        key_fields = ['unified_no', 'nationality', 'visa_file_number', 'entry_permit_no']
+        for field in key_fields:
+            if data[field] != self.DEFAULT_VALUE:
+                logger.debug(f"Extracted {field}: {data[field]}")
 
         return data
 
