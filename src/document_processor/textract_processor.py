@@ -741,11 +741,15 @@ class TextractProcessor:
             if match:
                 data['passport_number'] = match.group(1).strip()
                 break
-                
-        # Date of birth - try multiple formats
+            
+        # Date of birth - enhanced patterns
         dob_patterns = [
             r'(?:Date of Birth|DOB)[.:\s]*(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})',
-            r'(?:Date of Birth|DOB)[.:\s]*(\d{1,2}\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s*\d{2,4})'
+            r'(?:Date of Birth|DOB)[.:\s]*(\d{1,2}\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s*\d{2,4})',
+            r'Birth\s*Date[.:\s]*(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})',
+            r'DAT[ES]\s*OF\s*BIRTH[.:\s]*(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})',
+            r'DOB[.:\s]*(\d{1,2}[/.-]\d{1,2}[/.-]\d{4})',
+            r'BIRTH\s*DATE[.:\s]*(\d{1,2}[/.-]\d{1,2}[/.-]\d{4})'
         ]
         
         for pattern in dob_patterns:

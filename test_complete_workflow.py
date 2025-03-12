@@ -32,33 +32,25 @@ from src.utils.process_tracker import ProcessTracker
 from src.services.data_combiner import DataCombiner
 from src.document_processor.excel_processor import EnhancedExcelProcessor as ExcelProcessor
 
-def get_processed_emails():
-    """Get list of processed email IDs and subjects."""
-    if os.path.exists("processed_emails_manual.txt"):
-        try:
-            with open("processed_emails_manual.txt", "r") as f:
-                lines = [line.strip() for line in f.readlines()]
-                logger.info(f"Loaded {len(lines)} processed emails from tracking file")
-                return lines
-        except Exception as e:
-            logger.error(f"Error reading processed_emails_manual.txt: {str(e)}")
-            return []
-    else:
-        logger.info("No processed emails tracking file found, creating new one")
-        # Create empty file
-        with open("processed_emails_manual.txt", "w") as f:
-            pass
-        return []
+def is_email_processed(email_id):
+    """Simple check if email has been processed."""
+    processed_file = "processed_emails_simple.txt"
+    
+    # Check if file exists and contains the email ID
+    if os.path.exists(processed_file):
+        with open(processed_file, 'r') as f:
+            processed_ids = [line.strip() for line in f.readlines()]
+            return email_id in processed_ids
+    return False
 
-def add_processed_email(email_id, subject):
-    """Add email ID and subject to processed list."""
-    try:
-        identifier = f"{email_id}:{subject}"
-        with open("processed_emails_manual.txt", "a") as f:
-            f.write(f"{identifier}\n")
-        logger.info(f"Added to processed emails: {identifier}")
-    except Exception as e:
-        logger.error(f"Error adding email to processed list: {str(e)}")
+def mark_email_processed(email_id):
+    """Mark email as processed in simple tracking file."""
+    processed_file = "processed_emails_simple.txt"
+    
+    # Append email ID to file
+    with open(processed_file, 'a') as f:
+        f.write(f"{email_id}\n")
+    logger.info(f"Marked email {email_id} as processed")
 
 # Create WorkflowTester class from the original file
 class CompletedSubmission:
@@ -106,31 +98,16 @@ class WorkflowTester:
         """Select the appropriate template based on the email subject."""
         subject_lower = subject.lower()
         
-        # Map of company names to template files
-        company_templates = {
-            'nas': 'templates/nas.xlsx',
-            'al madallah': 'templates/al_madallah.xlsx',
-            'almadallah': 'templates/al_madallah.xlsx',
-            'union': 'templates/union.xlsx',
-            'al sagar': 'templates/al_sagar.xlsx',
-            'alsagar': 'templates/al_sagar.xlsx',
-            'dic': 'templates/dic.xlsx',
-            'dni': 'templates/dni.xlsx',
-            'ngi': 'templates/ngi.xlsx',
-            'qic': 'templates/qic.xlsx',
-            'orient': 'templates/orient.xlsx',
-            'takaful': 'templates/takaful.xlsx'
-        }
-        
-        # Look for company names in the subject
-        for company, template in company_templates.items():
-            if company in subject_lower:
-                logger.info(f"Selected template for {company}: {template}")
-                return template
-        
-        # Default to Nas template if no match found
-        logger.warning(f"No company match found in subject '{subject}', defaulting to Nas template")
-        return 'templates/nas.xlsx'
+        # Check for Al Madallah first
+        if 'al madallah' in subject_lower or 'almadallah' in subject_lower:
+            template = 'templates/al_madallah.xlsx'
+            logger.info(f"Selected Al Madallah template: {template}")
+            return template
+            
+        # Default to NAS template
+        template = 'templates/nas.xlsx'
+        logger.info(f"Selected NAS template (default): {template}")
+        return template
     
     def _validate_templates(self):
         """Ensure all required templates exist."""
@@ -243,7 +220,7 @@ class WorkflowTester:
                     is_processed = is_processed_tracker or is_processed_direct
                     
                     # Skip if already processed (unless bypassing)
-                    if not bypass_dedup and is_processed:
+                    if not bypass_dedup and is_email_processed(email_id):
                         logger.info(f"Skipping already processed email: {subject}")
                         skipped += 1
                         continue
@@ -260,16 +237,7 @@ class WorkflowTester:
                             successful += 1
                             # Record as processed if successful
                             if not bypass_dedup:
-                                metadata = {
-                                    'process_id': result.get('process_id'),
-                                    'submission_dir': result.get('submission_dir'),
-                                    'processed_at': datetime.now().isoformat(),
-                                    'subject': subject,
-                                    'received_time': email.get('receivedDateTime', ''),
-                                    'has_attachments': email.get('hasAttachments', False),
-                                    'documents_processed': list(result.get('documents', {}).keys())
-                                }
-                                email_tracker.mark_processed(email_id, metadata)
+                                mark_email_processed(email_id)
                                 # Also update our direct tracking set
                                 processed_ids.add(email_id)
                         else:
@@ -500,6 +468,9 @@ class WorkflowTester:
                 )
                 
                 logger.info(f"Data combination result: {result['status']}, rows processed: {result.get('rows_processed', 0)}")
+                # Check if extracted data was properly transferred to Excel
+                if result['status'] == 'success':
+                    self.check_data_transfer(extracted_data, output_path)
             except Exception as e:
                 logger.error(f"Error combining data: {str(e)}", exc_info=True)
                 raise Exception(f"Failed to combine data: {str(e)}")
@@ -872,6 +843,67 @@ class WorkflowTester:
     def get_completed_submissions(self) -> List[CompletedSubmission]:
         """Get list of completed submissions."""
         return self.completed_submissions
+    
+    def check_data_transfer(self, extracted_data, output_path):
+        """Check if extracted data was properly transferred to Excel."""
+        logger.info(f"Checking data transfer to Excel file: {output_path}")
+        
+        if not os.path.exists(output_path):
+            logger.error(f"Output file does not exist: {output_path}")
+            return False
+            
+        try:
+            df = pd.read_excel(output_path)
+            
+            # Print key extracted fields
+            logger.info("Key extracted fields:")
+            key_fields = ['unified_no', 'nationality', 'passport_no', 'passport_number', 
+                        'visa_file_number', 'dob', 'date_of_birth']
+            
+            extracted_values = {}
+            for field in key_fields:
+                if field in extracted_data:
+                    value = extracted_data[field]
+                    if value != '.':
+                        extracted_values[field] = value
+                        logger.info(f"  Extracted {field}: {value}")
+                        
+            # Print corresponding values in Excel
+            logger.info("Corresponding fields in Excel:")
+            excel_values = {}
+            for field in key_fields:
+                excel_field = field
+                # Handle field name variants
+                if field == 'passport_number':
+                    excel_field = 'passport_no'
+                elif field == 'date_of_birth':
+                    excel_field = 'dob'
+                    
+                if excel_field in df.columns:
+                    value = df[excel_field].iloc[0]
+                    if pd.notna(value) and str(value).strip() != '':
+                        excel_values[excel_field] = value
+                        logger.info(f"  Excel {excel_field}: {value}")
+            
+            # Check if fields match
+            for ext_field, ext_value in extracted_values.items():
+                excel_field = ext_field
+                if ext_field == 'passport_number':
+                    excel_field = 'passport_no'
+                elif ext_field == 'date_of_birth':
+                    excel_field = 'dob'
+                    
+                if excel_field in excel_values:
+                    excel_value = str(excel_values[excel_field])
+                    ext_value = str(ext_value)
+                    
+                    if excel_value != ext_value:
+                        logger.warning(f"Mismatch for {ext_field}: Extracted={ext_value}, Excel={excel_value}")
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error checking data transfer: {str(e)}")
+            return False
 
 # Configure logging
 logging.basicConfig(
@@ -1062,26 +1094,18 @@ def run_validation(output_dir: str):
     return valid_count == len(validation_results)
 
 def reset_processed_emails():
-    """Reset the processed emails tracking file."""
-    try:
-        # Remove JSON file
-        if os.path.exists("processed_emails.json"):
-            os.remove("processed_emails.json")
-            logger.info("Removed processed_emails.json file")
-            
-        # Create empty JSON file
-        with open("processed_emails.json", "w") as f:
-            f.write("{}")
-        logger.info("Created empty processed_emails.json file")
-        
-        # Also check for old file
-        if os.path.exists("processed_emails_manual.txt"):
-            os.remove("processed_emails_manual.txt")
-            logger.info("Removed processed_emails_manual.txt file")
-            
-        logger.info("Reset processed emails tracking")
-    except Exception as e:
-        logger.error(f"Error resetting email tracker: {str(e)}")
+    """Simple reset for email tracking."""
+    processed_file = "processed_emails_simple.txt"
+    
+    # Delete and recreate the file
+    if os.path.exists(processed_file):
+        os.remove(processed_file)
+        logger.info(f"Removed {processed_file}")
+    
+    # Create empty file
+    with open(processed_file, 'w') as f:
+        pass
+    logger.info("Reset processed emails tracking")
         
 def run_diagnostics():
     """Run diagnostics on document processing."""
