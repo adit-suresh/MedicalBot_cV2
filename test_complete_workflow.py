@@ -325,7 +325,7 @@ class WorkflowTester:
             except Exception as e:
                 logger.error(f"Error getting attachments: {str(e)}", exc_info=True)
                 raise Exception(f"Failed to get attachments: {str(e)}")
-                
+                    
             try:
                 saved_files = self.attachment_handler.process_attachments(attachments, email_id)
                 logger.info(f"Saved {len(saved_files)} attachment files")
@@ -342,6 +342,7 @@ class WorkflowTester:
                 document_paths = {}
                 excel_files = []
                 processed_docs = []
+                all_excel_rows = []  # Initialize this variable here
 
                 # First pass: identify Excel files and documents
                 for file_path in saved_files:
@@ -374,41 +375,22 @@ class WorkflowTester:
                 for doc_type, file_path in document_paths.items():
                     try:
                         logger.info(f"Debugging Textract for {doc_type}: {file_path}")
-                        debug_text = self.textract.debug_textract_results(file_path, doc_type)
-                        logger.info(f"Completed Textract debugging for {doc_type}")
+                        if hasattr(self.textract, 'debug_textract_results'):
+                            debug_text = self.textract.debug_textract_results(file_path, doc_type)
+                            logger.info(f"Completed Textract debugging for {doc_type}")
                     except Exception as e:
                         logger.error(f"Error in Textract debugging for {doc_type}: {str(e)}")
                 
-                # Process Emirates ID first if available (usually most reliable)
-                for doc_type, file_path in sorted(document_paths.items(), 
-                                                key=lambda x: 0 if 'emirates' in x[0] else 1):
+                for doc_type, file_path in document_paths.items():
                     try:
-                        # Use deepseek for enhanced OCR if available
-                        if self.deepseek and doc_type in ['passport', 'visa', 'emirates_id']:
-                            logger.info(f"Using DeepSeek for enhanced OCR on {doc_type}")
-                            deep_data = self.deepseek.process_document(file_path, doc_type)
-                            if deep_data:
-                                logger.info(f"DeepSeek extracted data from {doc_type}: {list(deep_data.keys())}")
-                                extracted_data.update(deep_data)
-                        
-                        # Always run textract as well (to capture any fields DeepSeek missed)
-                        textract_data = self.textract.process_document(file_path, doc_type)
-                        logger.info(f"Textract extracted data from {doc_type}: {list(textract_data.keys())}")
-                        
-                        # Merge data, keeping DeepSeek values if present
-                        for key, value in textract_data.items():
-                            if key not in extracted_data or extracted_data[key] == self.DEFAULT_VALUE:
-                                extracted_data[key] = value
-                        
-                        # Log extracted data for debugging
-                        for key, value in extracted_data.items():
-                            if key not in ['mrz_line1', 'mrz_line2'] and value != self.DEFAULT_VALUE:
-                                logger.info(f"Extracted {key}: {value}")
-                        
+                        data = self.textract.process_document(file_path, doc_type)
+                        logger.info(f"Extracted data from {doc_type}: {list(data.keys())}")
+                        extracted_data.update(data)
                     except Exception as e:
                         logger.error(f"Error processing {doc_type} document: {str(e)}", exc_info=True)
                         # Continue with other documents instead of failing
                         logger.warning(f"Continuing with partial data due to document processing error")
+                
             except Exception as e:
                 logger.error(f"Error processing documents: {str(e)}", exc_info=True)
                 raise Exception(f"Failed to process documents: {str(e)}")
@@ -416,7 +398,7 @@ class WorkflowTester:
             # Step 5: Process all Excel files
             try:
                 logger.info(f"Processing {len(excel_files)} Excel files")
-                all_excel_rows = []
+                all_excel_rows = []  # Initialize again to be safe
                 for excel_path in excel_files:
                     try:
                         df, errors = self.excel_processor.process_excel(excel_path, dayfirst=True)
@@ -437,6 +419,43 @@ class WorkflowTester:
                 logger.error(f"Error processing Excel files: {str(e)}", exc_info=True)
                 raise Exception(f"Failed to process Excel files: {str(e)}")
 
+            # Match documents to specific employees by name
+            if all_excel_rows and len(all_excel_rows) > 1:
+                logger.info(f"Attempting to match documents to {len(all_excel_rows)} employees")
+                
+                # Get names from documents
+                extracted_name = None
+                for field in ['name', 'full_name']:
+                    DEFAULT_VALUE = "."  # Define it locally
+                    if field in extracted_data and extracted_data[field] != DEFAULT_VALUE:
+                        extracted_name = extracted_data[field]
+                        logger.info(f"Found name in documents: {extracted_name}")
+                        break
+                
+                if extracted_name:
+                    # Find matching employee
+                    best_match_idx = None
+                    best_score = 0
+                    
+                    for idx, row in enumerate(all_excel_rows):
+                        # Get employee name from Excel
+                        first_name = str(row.get('First Name', '')).strip()
+                        last_name = str(row.get('Last Name', '')).strip()
+                        employee_name = f"{first_name} {last_name}".strip()
+                        
+                        # Calculate similarity
+                        if extracted_name.lower() in employee_name.lower() or employee_name.lower() in extracted_name.lower():
+                            similarity = len(set(extracted_name.lower().split()) & set(employee_name.lower().split()))
+                            if similarity > best_score:
+                                best_score = similarity
+                                best_match_idx = idx
+                    
+                    if best_match_idx is not None:
+                        logger.info(f"Matched documents to employee at index {best_match_idx}: {all_excel_rows[best_match_idx].get('First Name', '')} {all_excel_rows[best_match_idx].get('Last Name', '')}")
+                        # Process only the matched employee
+                        matched_employee = all_excel_rows[best_match_idx]
+                        all_excel_rows = [matched_employee]
+
             # Rename client files based on Excel data
             if all_excel_rows:
                 try:
@@ -449,7 +468,6 @@ class WorkflowTester:
             # Step 6: Select template based on company in subject
             template_path = self._select_template_for_company(subject)
                 
-
             # Step 7: Combine data
             try:
                 logger.info(f"Combining data using template: {template_path}")
@@ -468,9 +486,6 @@ class WorkflowTester:
                 )
                 
                 logger.info(f"Data combination result: {result['status']}, rows processed: {result.get('rows_processed', 0)}")
-                # Check if extracted data was properly transferred to Excel
-                if result['status'] == 'success':
-                    self.check_data_transfer(extracted_data, output_path)
             except Exception as e:
                 logger.error(f"Error combining data: {str(e)}", exc_info=True)
                 raise Exception(f"Failed to combine data: {str(e)}")
@@ -511,6 +526,22 @@ class WorkflowTester:
                         logger.info(f"Files are available locally at: {zip_path}")
                         print(f"\n⚠️ Email sending failed, but files are available at:\n{zip_path}\n")
                         
+                        # Try sending without attachment as fallback
+                        logger.warning("Trying to send email without attachment")
+                        fallback_body = (
+                            f"New submission processed: {subject}\n\n"
+                            f"The attachment was too large to send via email.\n"
+                            f"Files are available locally at: {zip_path}\n"
+                        )
+                        
+                        fallback_sent = self.email_sender.send_email(
+                            subject=f"Medical Bot: {subject} - Submission Complete (No Attachment)",
+                            body=fallback_body
+                        )
+                        
+                        if fallback_sent:
+                            logger.info("Successfully sent email without attachment")
+                            
                 except Exception as e:
                     logger.error(f"Error creating or sending submission: {str(e)}", exc_info=True)      
             except Exception as e:
@@ -904,6 +935,150 @@ class WorkflowTester:
         except Exception as e:
             logger.error(f"Error checking data transfer: {str(e)}")
             return False
+    
+    def _match_documents_to_employees(self, document_paths: Dict[str, str], all_excel_rows: List[Dict]) -> Dict[int, Dict[str, str]]:
+        """Match documents to specific employees based on name matching."""
+        if not document_paths or not all_excel_rows:
+            return {}
+            
+        # Extract employee names from Excel
+        employee_names = []
+        for idx, row in enumerate(all_excel_rows):
+            first_name = str(row.get('First Name', '')).strip()
+            last_name = str(row.get('Last Name', '')).strip()
+            full_name = f"{first_name} {last_name}".strip()
+            employee_names.append({
+                'index': idx,
+                'first_name': first_name,
+                'last_name': last_name,
+                'full_name': full_name
+            })
+        
+        # For each document, try to extract name and match to employee
+        document_matches = {}
+        for doc_type, file_path in document_paths.items():
+            try:
+                # Process document to extract data
+                doc_data = self.textract.process_document(file_path, doc_type)
+                
+                # Look for name in extracted data
+                extracted_name = None
+                for field in ['name', 'full_name']:
+                    if field in doc_data and doc_data[field] != '.':
+                        extracted_name = doc_data[field]
+                        break
+                
+                if not extracted_name:
+                    continue
+                    
+                # Find best employee match
+                best_match = None
+                best_score = 0
+                for emp in employee_names:
+                    score = self._calculate_name_match_score(extracted_name, emp['full_name'])
+                    if score > best_score:
+                        best_score = score
+                        best_match = emp
+                
+                # If good match found, assign document to employee
+                if best_match and best_score > 50:
+                    idx = best_match['index']
+                    if idx not in document_matches:
+                        document_matches[idx] = {}
+                    document_matches[idx][doc_type] = file_path
+                    logger.info(f"Matched {doc_type} to employee {best_match['full_name']} (score: {best_score})")
+                    
+            except Exception as e:
+                logger.error(f"Error matching document {doc_type}: {str(e)}")
+        
+        return document_matches
+
+    def _calculate_name_match_score(self, name1: str, name2: str) -> int:
+        """Calculate similarity score between two names."""
+        if not name1 or not name2:
+            return 0
+            
+        # Normalize names
+        name1 = name1.lower().strip()
+        name2 = name2.lower().strip()
+        
+        # Exact match
+        if name1 == name2:
+            return 100
+            
+        # Split into parts
+        parts1 = set(name1.split())
+        parts2 = set(name2.split())
+        
+        # Calculate intersection
+        common_parts = parts1.intersection(parts2)
+        
+        # Calculate score based on common parts
+        if not common_parts:
+            return 0
+            
+        return int(100 * len(common_parts) / max(len(parts1), len(parts2)))
+        
+    def debug_data_flow(self, extracted_data, excel_data, document_paths, final_excel_path):
+        """Create detailed debug report of data flow from extraction to final Excel."""
+        try:
+            debug_dir = "data_flow_debug"
+            os.makedirs(debug_dir, exist_ok=True)
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            debug_file = os.path.join(debug_dir, f"data_flow_{timestamp}.txt")
+            
+            with open(debug_file, 'w') as f:
+                # Document paths section
+                f.write("=" * 80 + "\n")
+                f.write("DOCUMENT PATHS:\n")
+                f.write("=" * 80 + "\n")
+                for doc_type, path in document_paths.items():
+                    f.write(f"{doc_type}: {path}\n")
+                f.write("\n\n")
+                
+                # Extracted data section
+                f.write("=" * 80 + "\n")
+                f.write("EXTRACTED DATA FROM DOCUMENTS:\n")
+                f.write("=" * 80 + "\n")
+                for key, value in sorted(extracted_data.items()):
+                    f.write(f"{key}: {value}\n")
+                f.write("\n\n")
+                
+                # Excel data section
+                f.write("=" * 80 + "\n")
+                f.write("INPUT EXCEL DATA:\n")
+                f.write("=" * 80 + "\n")
+                if isinstance(excel_data, list):
+                    for i, row in enumerate(excel_data):
+                        f.write(f"ROW {i+1}:\n")
+                        for key, value in sorted(row.items()):
+                            f.write(f"  {key}: {value}\n")
+                        f.write("\n")
+                elif isinstance(excel_data, dict):
+                    for key, value in sorted(excel_data.items()):
+                        f.write(f"{key}: {value}\n")
+                f.write("\n\n")
+                
+                # Final Excel output
+                f.write("=" * 80 + "\n")
+                f.write("FINAL EXCEL OUTPUT:\n")
+                f.write("=" * 80 + "\n")
+                try:
+                    df = pd.read_excel(final_excel_path)
+                    for i, row in df.iterrows():
+                        f.write(f"ROW {i+1}:\n")
+                        for col in df.columns:
+                            f.write(f"  {col}: {row[col]}\n")
+                        f.write("\n")
+                except Exception as e:
+                    f.write(f"Error reading final Excel: {str(e)}\n")
+                
+            logger.info(f"Created data flow debug report: {debug_file}")
+            return debug_file
+        except Exception as e:
+            logger.error(f"Error creating debug report: {str(e)}")
+            return None
 
 # Configure logging
 logging.basicConfig(

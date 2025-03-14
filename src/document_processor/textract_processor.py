@@ -67,7 +67,7 @@ class TextractProcessor:
         
     @handle_errors(ErrorCategory.EXTERNAL_SERVICE, ErrorSeverity.HIGH)
     def process_document(self, file_path: str, doc_type: Optional[str] = None) -> Dict[str, str]:
-        """Process document with improved extraction reliability."""
+        """Process document with improved preprocessing."""
         try:
             # Start timing
             start_time = time.time()
@@ -75,11 +75,20 @@ class TextractProcessor:
             # Add debug logging
             logger.info(f"Processing document: {file_path}")
             
+            # Preprocess document for better OCR
+            processed_path = self.enhance_document_preprocessing(file_path)
+            
+            # Use processed document if available
+            if processed_path != file_path:
+                logger.info(f"Using preprocessed document: {processed_path}")
+                path_to_use = processed_path
+            else:
+                path_to_use = file_path
+                
             # Read file efficiently
-            file_bytes = self._read_file_bytes(file_path)
+            file_bytes = self._read_file_bytes(path_to_use)
 
             # Try multiple Textract features for better extraction
-            # First try with FORMS and TABLES
             response = self._get_textract_response(file_bytes, ["FORMS", "TABLES"])
             
             # Extract text content more efficiently
@@ -630,6 +639,9 @@ class TextractProcessor:
         
         # UNIFIED NUMBER - more robust patterns
         unified_patterns = [
+            r'UNIFIED\s*(?:NO|NUMBER)[.:\s]*(\d{7,10})',
+            r'U\.?I\.?D\.?\s*(?:NO)?[.:\s]*(\d{7,10})',
+            r'U\.?I\.?D\.?[.:\s#]*(\d{7,10})',
             r'U[\.\s]*I[\.\s]*D[\.\s]*(?:NO|NUMBER)[\.\s]*[:]*\s*(\d[\d\s]*)',
             r'(?:U\.?I\.?D\.?\s*No\.?|UNIFIED\s*(?:NO|NUMBER))[.:\s]*(\d[\d\s/]*)',
             r'(?<!\w)U\.?I\.?D\.?\s*[:#]?\s*(\d[\d\s/]*)',
@@ -712,6 +724,8 @@ class TextractProcessor:
             r'Full Name[.:\s]*([A-Za-z\s]+?)(?=\s*\n|\s*$)',
             r'Name[.:\s]*([A-Za-z\s]+?)(?=\s*\n|\s*$)',
             r'(?:^|\n)(?:Mr\.?|Mrs\.?|Ms\.?)?\s*([A-Za-z\s]+?)(?=\s*\n|\s*Nationality|\s*$)'
+            r'NAME\s*[:.]\s*([A-Za-z\s]+)',
+            r'(?:EMPLOYEE|WORKER)\s+NAME\s*[:.]\s*([A-Za-z\s]+)'
         ]
         
         for pattern in name_patterns:
@@ -734,6 +748,8 @@ class TextractProcessor:
             r'Passport(?:\s+No)?[.:\s]*([A-Z0-9]+)(?=\s*\n|\s*$)',
             r'Passport\s*(?:Number|No\.?)[.:\s]*([A-Z0-9]+)',
             r'(?<!\w)([A-Z][0-9]{6,9})(?!\w)'  # Common format like A1234567
+            r'PASSPORT\s*(?:NO|NUMBER)[.:\s]*([A-Z0-9]{6,12})',
+            r'PASSPORT\s*(?:[:.]\s*)([A-Z0-9]{6,12})'
         ]
         
         for pattern in passport_patterns:
@@ -1167,3 +1183,40 @@ class TextractProcessor:
         except Exception as e:
             logger.error(f"Diagnostics failed: {str(e)}")
             return {"error": str(e)}
+        
+    def enhance_document_preprocessing(self, file_path):
+        """Preprocess document for better OCR results."""
+        try:
+            import cv2
+            import numpy as np
+            from PIL import Image
+            
+            # Check if it's an image file
+            if file_path.lower().endswith(('.jpg', '.jpeg', '.png', '.tif', '.tiff')):
+                # Read with OpenCV
+                img = cv2.imread(file_path)
+                
+                # Resize to standardize
+                height, width = img.shape[:2]
+                if height > 3000 or width > 3000:
+                    scale = 3000 / max(height, width)
+                    img = cv2.resize(img, None, fx=scale, fy=scale)
+                
+                # Convert to grayscale
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                
+                # Apply adaptive thresholding
+                thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                            cv2.THRESH_BINARY, 11, 2)
+                
+                # Denoise
+                denoised = cv2.fastNlMeansDenoising(thresh, None, 10, 7, 21)
+                
+                # Save processed image
+                processed_path = file_path.replace('.', '_processed.')
+                cv2.imwrite(processed_path, denoised)
+                return processed_path
+            return file_path
+        except Exception as e:
+            logger.error(f"Error preprocessing document: {str(e)}")
+            return file_path

@@ -94,26 +94,30 @@ class DataCombiner:
             'visa_expiry_date': ['Visa Expiry Date']
         }
 
-    def _process_emirates_id(self, value):
-        """Replace non-784 Emirates IDs with default value."""
-        if value is None or pd.isna(value) or value == '' or value == self.DEFAULT_VALUE:
-            return ''
-        
-        # Clean and standardize the format
-        value_str = str(value)
-        # Remove non-digit and non-hyphen characters
-        clean_value = re.sub(r'[^0-9\-]', '', value_str)
-        
-        # Add hyphens if missing
-        if '-' not in clean_value and len(clean_value) == 15:
-            clean_value = f"{clean_value[:3]}-{clean_value[3:7]}-{clean_value[7:14]}-{clean_value[14]}"
-        
-        # Check if it starts with 784
-        if not clean_value.startswith('784'):
-            logger.info(f"Emirates ID '{clean_value}' doesn't start with 784, replacing with default")
+    def _process_emirates_id(self, value: str) -> str:
+        """Process Emirates ID with special handling for non-784 IDs."""
+        try:
+            if not value or pd.isna(value) or value == '' or value == self.DEFAULT_VALUE:
+                return ''
+            
+            # Clean the value
+            value_str = str(value).strip()
+            cleaned = re.sub(r'[^0-9\-]', '', value_str)
+            
+            # Format with hyphens if needed and possible
+            if '-' not in cleaned and len(cleaned) == 15:
+                cleaned = f"{cleaned[:3]}-{cleaned[3:7]}-{cleaned[7:14]}-{cleaned[14]}"
+            
+            # Check if it starts with 784
+            if not cleaned.startswith('784'):
+                logger.info(f"Emirates ID '{cleaned}' doesn't start with 784, replacing with default value")
+                return '111-1111-1111111-1'
+            
+            return cleaned
+        except Exception as e:
+            logger.error(f"Error processing Emirates ID: {str(e)}")
+            # Return default on error
             return '111-1111-1111111-1'
-        
-        return clean_value
     
     def _initialize_date_fields(self) -> Set[str]:
         """Initialize set of fields that should be formatted as dates."""
@@ -133,6 +137,7 @@ class DataCombiner:
     @handle_errors(ErrorCategory.PROCESS, ErrorSeverity.MEDIUM)
     def combine_and_populate_template(self, template_path: str, output_path: str, 
                                     extracted_data: Dict, excel_data: Any = None, document_paths: Dict[str, str] = None) -> Dict:
+        """Combine data with better handling of multiple rows."""
         logger.info(f"Starting data combination with template: {template_path}")
         logger.info(f"Extracted data has {len(extracted_data)} fields: {list(extracted_data.keys())}")
         
@@ -156,7 +161,6 @@ class DataCombiner:
             else:
                 logger.warning(f"Excel data has unexpected type: {type(excel_data)}")
                 
-        """Combine data with better handling of multiple rows."""
         start_time = time.time()
         try:
             # Validate template
@@ -169,6 +173,9 @@ class DataCombiner:
             
             # Initialize field mappings
             field_mappings = {}
+            
+            # Make sure template columns are properly understood
+            logger.info(f"Template has {len(template_columns)} columns: {template_columns[:10]}...")
             
             # Process excel_data with robust error handling
             try:
@@ -213,16 +220,32 @@ class DataCombiner:
                 logger.error(f"Error in data processing: {str(e)}", exc_info=True)
                 # Fall back to creating a simple dataframe with just the extracted data
                 logger.info("Falling back to basic data processing")
-                simple_data = {}
-                # Add extracted data fields that match template columns
-                for field, value in extracted_data.items():
-                    norm_field = self._normalize_field_name(field)
-                    # Check if field directly matches a template column or its normalized form
-                    if field in template_columns or norm_field in [self._normalize_column_name(col) for col in template_columns]:
-                        simple_data[field] = value
                 
-                # Create a DataFrame with the simple data
-                result_df = pd.DataFrame([simple_data])
+                # Create a DataFrame with extracted data directly mapped to template columns
+                result_data = {}
+                
+                # Try to map extraction directly to template columns
+                for col in template_columns:
+                    col_lower = col.lower()
+                    # Check for direct matches in extracted data
+                    for key, value in extracted_data.items():
+                        key_lower = key.lower()
+                        if key_lower == col_lower or key_lower.replace('_', ' ') == col_lower:
+                            result_data[col] = value
+                            break
+                    # If no match found, use default value
+                    if col not in result_data:
+                        result_data[col] = self.DEFAULT_VALUE
+                
+                # Also try the Excel data
+                if isinstance(excel_data, pd.DataFrame) and not excel_data.empty:
+                    first_row = excel_data.iloc[0].to_dict()
+                    for col in template_columns:
+                        if col in first_row and first_row[col] not in [None, '', 'nan', self.DEFAULT_VALUE]:
+                            result_data[col] = first_row[col]
+                
+                # Create a DataFrame
+                result_df = pd.DataFrame([result_data])
                 
             # Save results
             try:
@@ -231,30 +254,33 @@ class DataCombiner:
                     os.makedirs(output_dir, exist_ok=True)
                     
                 # Final cleanup of date formats
-                date_fields = ['effective_date', 'dob', 'passport_expiry_date', 'visa_expiry_date']
+                date_fields = ['effective_date', 'dob', 'passport_expiry_date', 'visa_expiry_date', 
+                            'Effective Date', 'DOB', 'Passport Expiry Date', 'Visa Expiry Date']
                 for field in date_fields:
                     if field in result_df.columns:
                         result_df[field] = result_df[field].apply(
-                            lambda x: self._format_date_value(x) if pd.notna(x) else self.DEFAULT_VALUE
+                            lambda x: self._format_date_value(x) if pd.notna(x) and x != '' and x != self.DEFAULT_VALUE else x
                         )
                 
                 # Apply special formatting for default values
-                if hasattr(self, '_format_fields_for_output'):
-                    result_df = self._format_fields_for_output(result_df)
-                else:
-                    # Fallback if method doesn't exist
-                    for col in result_df.columns:
-                        col_lower = col.lower()
-                        # Only Middle Name gets '.' default
-                        if col_lower == 'middle_name' or col == 'Middle Name':
-                            result_df[col] = result_df[col].apply(
-                                lambda x: '.' if pd.isna(x) or x == '' or x == self.DEFAULT_VALUE else x
-                            )
-                        else:
-                            # All other fields get empty string
-                            result_df[col] = result_df[col].apply(
-                                lambda x: '' if pd.isna(x) or x == '' or x == self.DEFAULT_VALUE else x
-                            )
+                for col in result_df.columns:
+                    col_lower = col.lower()
+                    # Only Middle Name gets '.' default
+                    if col_lower == 'middle name' or col == 'Middle Name':
+                        result_df[col] = result_df[col].apply(
+                            lambda x: '.' if pd.isna(x) or x == '' or x == self.DEFAULT_VALUE else x
+                        )
+                    else:
+                        # All other fields get empty string
+                        result_df[col] = result_df[col].apply(
+                            lambda x: '' if pd.isna(x) or x == '' or x == self.DEFAULT_VALUE else x
+                        )
+                
+                # Log key columns before saving
+                for col in ['First Name', 'Last Name', 'Nationality', 'Passport No', 'Emirates Id', 'Unified No']:
+                    if col in result_df.columns:
+                        values = result_df[col].tolist()
+                        logger.info(f"Column {col} values: {values}")
                 
                 # Save to Excel
                 result_df.to_excel(output_path, index=False)
@@ -311,42 +337,121 @@ class DataCombiner:
             return template_info
 
     def _process_multiple_rows(self, extracted_data: Dict, excel_data: pd.DataFrame, 
-                        template_columns: List[str], field_mappings: Dict,
-                        document_paths: Dict[str, str] = None) -> pd.DataFrame:
-        """Process multiple rows of data with batch processing for performance."""
+                      template_columns: List[str], field_mappings: Dict,
+                      document_paths: Dict[str, str] = None) -> pd.DataFrame:
+        """Process multiple rows with better handling of document data."""
+        # Extract name from documents to match with rows
+        extracted_name = None
+        DEFAULT_VALUE = self.DEFAULT_VALUE  # Store this to avoid repeated access
+        
+        for field in ['name', 'full_name']:
+            if field in extracted_data and extracted_data[field] != DEFAULT_VALUE:
+                extracted_name = extracted_data[field]
+                logger.info(f"Found name in documents: {extracted_name}")
+                break
+        
         result_rows = []
         
-        # Clean document data once
-        cleaned_extracted = self._clean_extracted_data(extracted_data)
-        
-        # Process each row
+        # Process each Excel row
         for idx, excel_row in excel_data.iterrows():
             # Clean Excel row
             excel_dict = excel_row.to_dict()
             cleaned_excel = self._clean_excel_data(excel_dict)
             
-            # Combine row data with document paths
-            combined_row = self._combine_row_data(cleaned_extracted, cleaned_excel, document_paths)
+            # If we have a name from documents, only apply document data to matching rows
+            apply_document_data = True
+            if extracted_name:
+                first_name = str(excel_dict.get('First Name', '')).strip()
+                last_name = str(excel_dict.get('Last Name', '')).strip()
+                employee_name = f"{first_name} {last_name}".strip()
+                
+                # Simple matching - see if names have any common words
+                common_words = set(extracted_name.lower().split()) & set(employee_name.lower().split())
+                apply_document_data = len(common_words) > 0
+                
+                logger.info(f"Row {idx}: {employee_name}, document name: {extracted_name}, common words: {common_words}, apply document data: {apply_document_data}")
             
+            # Combine row data, conditionally applying document data
+            if apply_document_data:
+                combined_row = self._combine_row_data(extracted_data, cleaned_excel, document_paths)
+            else:
+                # Use only Excel data for non-matching rows
+                combined_row = cleaned_excel
+                
             # Map to template
             mapped_row = self._map_to_template(combined_row, template_columns, field_mappings)
+            
+            # Directly process Emirates ID
+            for col in mapped_row:
+                if 'emirates' in col.lower() and 'id' in col.lower():
+                    value = mapped_row[col]
+                    if value and value != DEFAULT_VALUE:
+                        # Format and validate
+                        clean_id = self._format_emirates_id(value)
+                        mapped_row[col] = clean_id
+            
+            # Apply mandatory fields
+            mapped_row['Work Country'] = 'United Arab Emirates'
+            mapped_row['Residence Country'] = 'United Arab Emirates'
+            mapped_row['Commission'] = 'NO'
+            
+            # Ensure Middle Name has '.' while other empty fields are truly empty
+            for col in mapped_row:
+                col_lower = col.lower()
+                # Only Middle Name gets default '.'
+                if 'middle' in col_lower and 'name' in col_lower:
+                    if pd.isna(mapped_row[col]) or mapped_row[col] == '' or mapped_row[col] == DEFAULT_VALUE:
+                        mapped_row[col] = '.'
+                # All other fields should be empty rather than '.'
+                elif mapped_row[col] == DEFAULT_VALUE:
+                    mapped_row[col] = ''
+            
             result_rows.append(mapped_row)
         
-        return pd.DataFrame(result_rows)
+        # Create DataFrame from processed rows
+        result_df = pd.DataFrame(result_rows)
+        
+        # Final check for Emirates ID across all rows
+        if 'Emirates Id' in result_df.columns:
+            result_df['Emirates Id'] = result_df['Emirates Id'].apply(self._format_emirates_id)
+        
+        return result_df
 
     def _process_single_row(self, extracted_data: Dict, template_columns: List[str],
-                      field_mappings: Dict, document_paths: Dict[str, str] = None) -> pd.DataFrame:
+                  field_mappings: Dict, document_paths: Dict[str, str] = None) -> pd.DataFrame:
         """Process single row of data."""
         cleaned_data = self._clean_extracted_data(extracted_data)
         combined_data = self._combine_row_data(cleaned_data, {}, document_paths)
         mapped_data = self._map_to_template(combined_data, template_columns, field_mappings)
+        
+        # Process Emirates ID directly
+        for col in mapped_data:
+            if 'emirates_id' in col.lower() or 'emirates id' in col.lower():
+                mapped_data[col] = self._format_emirates_id(mapped_data[col])
+        
         return pd.DataFrame([mapped_data])
 
     def _clean_extracted_data(self, data: Dict) -> Dict:
-        """Clean extracted document data with standardization."""
+        """Clean extracted data with standardization."""
         cleaned = {}
         for key, value in data.items():
+            # Skip None values
+            if value is None:
+                continue
+                
             normalized_key = self._normalize_field_name(key)
+            
+            # Special handling for specific fields
+            if 'passport' in normalized_key and ('no' in normalized_key or 'number' in normalized_key):
+                normalized_key = 'passport_number'
+            elif 'emirates' in normalized_key and 'id' in normalized_key:
+                normalized_key = 'emirates_id'
+            elif 'dob' in normalized_key or ('date' in normalized_key and 'birth' in normalized_key):
+                normalized_key = 'date_of_birth'
+            elif 'unified' in normalized_key or 'uid' in normalized_key:
+                normalized_key = 'unified_no'
+            elif 'visa' in normalized_key and 'file' in normalized_key:
+                normalized_key = 'visa_file_number'
             
             if isinstance(value, str):
                 # Remove extra whitespace, normalize case
@@ -374,7 +479,7 @@ class DataCombiner:
                 else:
                     # Convert other types to string
                     cleaned[normalized_key] = str(value)
-                    
+                        
         return cleaned
     
     def _format_output_value(self, value, field_name):
@@ -435,19 +540,24 @@ class DataCombiner:
         return cleaned
     
     def _format_emirates_id(self, eid: str) -> str:
-        """Format Emirates ID to include hyphens in correct positions."""
-        if not eid or eid == self.DEFAULT_VALUE:
-            return self.DEFAULT_VALUE
+        """Format Emirates ID to include hyphens and validate format."""
+        if not eid or eid == self.DEFAULT_VALUE or pd.isna(eid):
+            return ''
             
-        # Remove any existing hyphens or spaces
-        digits = re.sub(r'[^0-9]', '', str(eid))
+        # Remove any non-digit or non-hyphen characters
+        cleaned = re.sub(r'[^0-9\-]', '', str(eid))
         
-        # Check if we have the correct number of digits
-        if len(digits) == 15:
-            # Format as XXX-XXXX-XXXXXXX-X
-            return f"{digits[:3]}-{digits[3:7]}-{digits[7:14]}-{digits[14]}"
+        # Check if it already has hyphens
+        if '-' not in cleaned and len(cleaned) == 15:
+            # Format with hyphens in correct positions
+            cleaned = f"{cleaned[:3]}-{cleaned[3:7]}-{cleaned[7:14]}-{cleaned[14]}"
         
-        return eid
+        # Check if it starts with 784
+        if not cleaned.startswith('784'):
+            logger.info(f"Emirates ID '{cleaned}' doesn't start with 784, replacing with default ID")
+            return '111-1111-1111111-1'
+        
+        return cleaned
 
 
     def _combine_row_data(self, extracted: Dict, excel: Dict, document_paths: Dict[str, str] = None) -> Dict:
@@ -455,41 +565,50 @@ class DataCombiner:
         # Start with a deep copy of Excel data to avoid modification
         combined = copy.deepcopy(excel)
         
+        # Debug logging
+        logger.info(f"Combining data: {len(extracted)} extracted fields, {len(excel)} excel fields")
+        
         # First, format Emirates ID in Excel data if present
         if 'emirates_id' in combined and combined['emirates_id'] != self.DEFAULT_VALUE:
             combined['emirates_id'] = self._format_emirates_id(combined['emirates_id'])
+            
+        # Make sure Emirates ID is properly processed
+        if 'Emirates Id' in combined and combined['Emirates Id'] != self.DEFAULT_VALUE:
+            combined['Emirates Id'] = self._process_emirates_id(combined['Emirates Id'])
         
         # Identify special fields that require custom handling
         name_fields = ['first_name', 'middle_name', 'last_name', 'full_name']
-        id_fields = ['passport_number', 'emirates_id', 'entry_permit_no', 'unified_no']
+        id_fields = ['passport_number', 'passport_no', 'emirates_id', 'entry_permit_no', 'unified_no']
         date_fields = ['dob', 'date_of_birth', 'effective_date', 'passport_expiry_date', 'visa_expiry_date']
         
-        # Field mapping for extracted data
-        field_map = {
-            'entry_permit_no': ['visa_file_number', 'unified_no', 'permit_number'],
-            'emirates_id': ['eid', 'id_number'],
-            'passport_number': ['passport_no'],
-            'given_names': ['first_name', 'middle_name'],
-            'surname': ['last_name'],
-            'full_name': ['name', 'customer_name'],
-            'name_en': ['name', 'first_name'],
-            'nationality': ['nationality', 'citizenship'],
-            'date_of_birth': ['dob', 'birth_date'],
-            'gender': ['sex'],
-            'profession': ['occupation', 'job_title'],
-            'expiry_date': ['passport_expiry_date', 'visa_expiry_date'],
-            'issue_date': ['date_of_issue']
+        # Explicitly map Textract fields to Excel fields - critical for proper mapping
+        critical_mappings = {
+            'nationality': 'Nationality',
+            'passport_number': 'Passport No',
+            'emirates_id': 'Emirates Id',
+            'visa_file_number': 'Visa File Number',
+            'visa_number': 'Visa File Number',
+            'unified_no': 'Unified No',
+            'u.i.d._no.': 'Unified No',
+            'profession': 'Occupation',
+            'date_of_birth': 'DOB',
+            'name': 'First Name',  # Map full name to first name if needed
         }
         
-        # Track overridden fields
-        overridden = []
+        # Apply all critical mappings with direct field names
+        for ext_field, excel_field in critical_mappings.items():
+            if ext_field in extracted and extracted[ext_field] != self.DEFAULT_VALUE:
+                if excel_field not in combined or combined[excel_field] == self.DEFAULT_VALUE or pd.isna(combined[excel_field]):
+                    combined[excel_field] = extracted[ext_field]
+                    logger.info(f"Critical mapping: {ext_field} -> {excel_field}: {extracted[ext_field]}")
         
+        # DOB handling with more explicit handling
         if 'dob' in excel and excel['dob'] not in [self.DEFAULT_VALUE, '', None, 'nan']:
-            combined['dob'] = self._format_date_value(excel['dob'])
+            combined['DOB'] = self._format_date_value(excel['dob'])
         elif 'DOB' in excel and excel['DOB'] not in [self.DEFAULT_VALUE, '', None, 'nan']:
-            combined['dob'] = self._format_date_value(excel['DOB'])
+            combined['DOB'] = self._format_date_value(excel['DOB'])
         elif 'date_of_birth' in extracted and extracted['date_of_birth'] != self.DEFAULT_VALUE:
-            combined['dob'] = self._format_date_value(extracted['date_of_birth'])
+            combined['DOB'] = self._format_date_value(extracted['date_of_birth'])
         
         # First, handle date fields from Excel data to ensure proper format
         for field in date_fields:
@@ -505,7 +624,45 @@ class DataCombiner:
             if extracted['given_names'] != self.DEFAULT_VALUE and extracted['surname'] != self.DEFAULT_VALUE:
                 self._handle_passport_names(extracted['given_names'], extracted['surname'], combined)
         
-        # Process all other extracted fields
+        # Handle name from extraction if Excel has it
+        if 'name' in extracted and extracted['name'] != self.DEFAULT_VALUE:
+            # Check Excel fields
+            if 'First Name' in combined and 'Last Name' in combined:
+                # If both fields are empty or default, use extracted name
+                first_empty = not combined['First Name'] or combined['First Name'] == self.DEFAULT_VALUE
+                last_empty = not combined['Last Name'] or combined['Last Name'] == self.DEFAULT_VALUE
+                
+                if first_empty and last_empty:
+                    name_parts = extracted['name'].split()
+                    if len(name_parts) >= 2:
+                        combined['First Name'] = name_parts[0]
+                        combined['Last Name'] = name_parts[-1]
+                        if len(name_parts) > 2:
+                            combined['Middle Name'] = ' '.join(name_parts[1:-1])
+                    else:
+                        combined['First Name'] = extracted['name']
+        
+        # Field mapping for extracted data
+        field_map = {
+            'entry_permit_no': ['visa_file_number', 'unified_no', 'permit_number', 'Visa File Number'],
+            'emirates_id': ['eid', 'id_number', 'Emirates Id'],
+            'passport_number': ['passport_no', 'Passport No'],
+            'given_names': ['first_name', 'middle_name', 'First Name', 'Middle Name'],
+            'surname': ['last_name', 'Last Name'],
+            'full_name': ['name', 'customer_name', 'First Name'],
+            'name_en': ['name', 'first_name', 'First Name'],
+            'nationality': ['nationality', 'citizenship', 'Nationality'],
+            'date_of_birth': ['dob', 'birth_date', 'DOB'],
+            'gender': ['sex', 'Gender'],
+            'profession': ['occupation', 'job_title', 'Occupation'],
+            'expiry_date': ['passport_expiry_date', 'visa_expiry_date', 'Passport Expiry Date', 'Visa Expiry Date'],
+            'issue_date': ['date_of_issue']
+        }
+        
+        # Track overridden fields
+        overridden = []
+        
+        # Process all other extracted fields with direct mapping to Excel columns
         for ext_key, value in extracted.items():
             # Skip default values and already processed name fields
             if value == self.DEFAULT_VALUE or ext_key in ['full_name', 'given_names', 'surname']:
@@ -520,9 +677,10 @@ class DataCombiner:
             for target_key in target_keys:
                 # Don't override non-empty Excel data except for ID fields
                 if target_key in combined:
-                    if combined[target_key] == self.DEFAULT_VALUE or target_key in id_fields:
+                    if combined[target_key] == self.DEFAULT_VALUE or target_key in id_fields or pd.isna(combined[target_key]):
                         combined[target_key] = value
                         overridden.append(target_key)
+                        logger.info(f"Mapped {ext_key} to {target_key}: {value}")
                         break
         
         # Priority check for ID fields - but preserve Excel data if extracted is empty
@@ -536,11 +694,13 @@ class DataCombiner:
                 if (id_field in combined and combined[id_field] == self.DEFAULT_VALUE) or \
                 (id_field not in ['emirates_id']):  # Don't override Emirates ID from Excel
                     combined[id_field] = value
-                    
-        if 'dob' in combined and combined['dob'] != self.DEFAULT_VALUE:
-            combined['date_of_birth'] = combined['dob']
+        
+        # Make sure DOB and date_of_birth are synchronized
+        if 'DOB' in combined and combined['DOB'] != self.DEFAULT_VALUE:
+            if 'date_of_birth' not in combined or combined['date_of_birth'] == self.DEFAULT_VALUE:
+                combined['date_of_birth'] = combined['DOB']
         elif 'date_of_birth' in combined and combined['date_of_birth'] != self.DEFAULT_VALUE:
-            combined['dob'] = combined['date_of_birth']            
+            combined['DOB'] = combined['date_of_birth']
                     
         if 'first_name' in combined and combined['first_name'] != self.DEFAULT_VALUE:
             # Check if we have a combined name scenario
@@ -569,45 +729,101 @@ class DataCombiner:
                         logger.info(f"Set last_name to: {last}")
                         
                 logger.info(f"Split name into first: {first}, middle: {middle}, last: {last}")
+        
+        # Same for First Name/Last Name (Excel column names)
+        if 'First Name' in combined and combined['First Name'] != self.DEFAULT_VALUE:
+            combined_name = combined['First Name']
+            
+            # If this looks like a combined name, and Last Name is missing
+            if len(combined_name.split()) > 1 and ('Last Name' not in combined or combined['Last Name'] == self.DEFAULT_VALUE):
+                name_parts = combined_name.split()
+                combined['First Name'] = name_parts[0]
+                if len(name_parts) > 2:
+                    combined['Middle Name'] = ' '.join(name_parts[1:-1])
+                    combined['Last Name'] = name_parts[-1]
+                else:
+                    combined['Last Name'] = name_parts[-1]
                 
-                if 'visa_file_number' in combined and combined['visa_file_number'] != self.DEFAULT_VALUE:
-                    visa_number = combined['visa_file_number']
-                    
-                    # Remove any non-digit characters to extract just the numbers
-                    digits = ''.join(filter(str.isdigit, visa_number))
-                    
-                    # Check if it starts with specific digits
-                    if digits.startswith('201'):
-                        logger.info(f"Visa file number {visa_number} starts with 201, setting emirate to Dubai")
-                        combined['visa_issuance_emirate'] = 'Dubai'
-                    elif digits.startswith('101'):
-                        logger.info(f"Visa file number {visa_number} starts with 101, setting emirate to Abu Dhabi")
-                        combined['visa_issuance_emirate'] = 'Abu Dhabi'
+        # Process contract name from employer name in visa
+        if 'sponsor_name' in extracted and extracted['sponsor_name'] != self.DEFAULT_VALUE:
+            if 'Contract Name' in combined:
+                employer_name = extracted['sponsor_name']
+                valid_contracts = [
+                    "Farnek Services - LSB",
+                    "Dreshak Maintenance LLC",
+                    "Farnek Manpower Supply Services",
+                    "Farnek Middle East LLC",
+                    "Farnek Security Services LLC -Dubai",
+                    "Farnek Security Systems Consultancy LLC",
+                    "Farnek Services LLC",
+                    "Farnek Services LLC Branch",
+                    "Smashing Cleaning Services LLC"
+                ]
                 
-                if 'effective_date' not in combined or combined['effective_date'] == self.DEFAULT_VALUE:
-                    combined['effective_date'] = datetime.now().strftime('%d/%m/%Y')
-                    logger.info(f"Setting default effective_date to today: {combined['effective_date']}")
+                if 'FARNEK' in employer_name.upper():
+                    for contract in valid_contracts:
+                        if 'FARNEK' in contract.upper():
+                            combined['Contract Name'] = contract
+                            break
+                elif 'DRESHAK' in employer_name.upper():
+                    combined['Contract Name'] = "Dreshak Maintenance LLC"
+                    
+        # Check for visa file number and set visa issuance emirate
+        if 'visa_file_number' in combined and combined['visa_file_number'] != self.DEFAULT_VALUE:
+            visa_number = combined['visa_file_number']
+            
+            # Remove any non-digit characters to extract just the numbers
+            digits = ''.join(filter(str.isdigit, str(visa_number)))
+            
+            # Check if it starts with specific digits
+            if digits.startswith('201'):
+                logger.info(f"Visa file number {visa_number} starts with 201, setting emirate to Dubai")
+                combined['visa_issuance_emirate'] = 'Dubai'
+            elif digits.startswith('101'):
+                logger.info(f"Visa file number {visa_number} starts with 101, setting emirate to Abu Dhabi")
+                combined['visa_issuance_emirate'] = 'Abu Dhabi'
+        
+        # Make sure effective date is set
+        if 'effective_date' not in combined or combined['effective_date'] == self.DEFAULT_VALUE:
+            combined['effective_date'] = datetime.now().strftime('%d/%m/%Y')
+            logger.info(f"Setting default effective_date to today: {combined['effective_date']}")
+            
+        # Also check Effective Date (Excel column name)
+        if 'Effective Date' not in combined or combined['Effective Date'] == self.DEFAULT_VALUE:
+            combined['Effective Date'] = datetime.now().strftime('%d/%m/%Y')
                     
         # Family No = Staff ID
         if 'staff_id' in combined and combined['staff_id'] != self.DEFAULT_VALUE:
             combined['family_no'] = combined['staff_id']
             logger.info(f"Set family_no to match staff_id: {combined['staff_id']}")
+        
+        if 'Staff ID' in combined and combined['Staff ID'] != self.DEFAULT_VALUE:
+            combined['Family No.'] = combined['Staff ID']
 
         # Work and residence country
         combined['work_country'] = 'United Arab Emirates'
         combined['residence_country'] = 'United Arab Emirates'
+        combined['Work Country'] = 'United Arab Emirates'
+        combined['Residence Country'] = 'United Arab Emirates'
 
         # Commission
         combined['commission'] = 'NO'
+        combined['Commission'] = 'NO'
 
         # Handle Mobile No format
         if 'mobile_no' in combined and combined['mobile_no'] != self.DEFAULT_VALUE:
             # Extract just the digits
-            digits = ''.join(filter(str.isdigit, combined['mobile_no']))
+            digits = ''.join(filter(str.isdigit, str(combined['mobile_no'])))
             # Take last 9 digits
             if len(digits) >= 9:
                 combined['mobile_no'] = digits[-9:]
             logger.info(f"Formatted mobile_no: {combined['mobile_no']}")
+        
+        # Same for Mobile No (Excel column name)
+        if 'Mobile No' in combined and combined['Mobile No'] != self.DEFAULT_VALUE:
+            digits = ''.join(filter(str.isdigit, str(combined['Mobile No'])))
+            if len(digits) >= 9:
+                combined['Mobile No'] = digits[-9:]
 
         # Handle emirate-based fields
         if 'visa_issuance_emirate' in combined:
@@ -619,23 +835,45 @@ class DataCombiner:
                 combined['work_region'] = 'DUBAI (DISTRICT UNKNOWN)'
                 combined['residence_region'] = 'DUBAI (DISTRICT UNKNOWN)'
                 combined['member_type'] = 'Expat whose residence issued in Dubai'
+                
+                # Also set Excel column names
+                combined['Work Emirate'] = 'Dubai'
+                combined['Residence Emirate'] = 'Dubai'
+                combined['Work Region'] = 'DUBAI (DISTRICT UNKNOWN)'
+                combined['Residence Region'] = 'DUBAI (DISTRICT UNKNOWN)'
+                combined['Member Type'] = 'Expat whose residence issued in Dubai'
             elif issuance_emirate:  # Any other emirate
                 combined['work_emirate'] = issuance_emirate
                 combined['residence_emirate'] = issuance_emirate
                 combined['work_region'] = 'Al Ain City'
                 combined['residence_region'] = 'Al Ain City'
                 combined['member_type'] = 'Expat whose residence issued other than Dubai'
+                
+                # Also set Excel column names
+                combined['Work Emirate'] = issuance_emirate
+                combined['Residence Emirate'] = issuance_emirate
+                combined['Work Region'] = 'Al Ain City'
+                combined['Residence Region'] = 'Al Ain City'
+                combined['Member Type'] = 'Expat whose residence issued other than Dubai'
 
         # Company phone and email
         if 'mobile_no' in combined and combined['mobile_no'] != self.DEFAULT_VALUE:
             if 'company_phone' not in combined or combined['company_phone'] == self.DEFAULT_VALUE:
                 combined['company_phone'] = combined['mobile_no']
+        
+        if 'Mobile No' in combined and combined['Mobile No'] != self.DEFAULT_VALUE:
+            if 'Company Phone' not in combined or combined['Company Phone'] == self.DEFAULT_VALUE:
+                combined['Company Phone'] = combined['Mobile No']
 
         if 'email' in combined and combined['email'] != self.DEFAULT_VALUE:
             if 'company_mail' not in combined or combined['company_mail'] == self.DEFAULT_VALUE:
                 combined['company_mail'] = combined['email']
-                            
-                return combined
+        
+        if 'Email' in combined and combined['Email'] != self.DEFAULT_VALUE:
+            if 'Company Mail' not in combined or combined['Company Mail'] == self.DEFAULT_VALUE:
+                combined['Company Mail'] = combined['Email']
+                
+        return combined
 
     def _split_full_name(self, full_name: str, combined: Dict) -> None:
         """Split full name into components intelligently."""
@@ -938,3 +1176,24 @@ class DataCombiner:
                 df[col] = df[col].apply(self._process_emirates_id)
         return df
                 
+
+    def _normalize_column_names(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Ensure column names match expected format."""
+        normalized = {}
+        for col in df.columns:
+            # Common variations
+            if 'passport' in col.lower() and 'no' in col.lower():
+                normalized[col] = 'Passport No'
+            elif 'emirates' in col.lower() and 'id' in col.lower():
+                normalized[col] = 'Emirates Id'
+            elif 'unified' in col.lower() and 'no' in col.lower():
+                normalized[col] = 'Unified No'
+            elif 'visa' in col.lower() and 'file' in col.lower():
+                normalized[col] = 'Visa File Number'
+            elif 'nationality' in col.lower():
+                normalized[col] = 'Nationality'
+            elif 'dob' in col.lower() or ('date' in col.lower() and 'birth' in col.lower()):
+                normalized[col] = 'DOB'
+        
+        # Rename columns that need normalization
+        return df.rename(columns=normalized)            
