@@ -339,77 +339,88 @@ class DataCombiner:
     def _process_multiple_rows(self, extracted_data: Dict, excel_data: pd.DataFrame, 
                       template_columns: List[str], field_mappings: Dict,
                       document_paths: Dict[str, str] = None) -> pd.DataFrame:
-        """Process multiple rows with better handling of document data."""
-        # Extract name from documents to match with rows
-        extracted_name = None
-        DEFAULT_VALUE = self.DEFAULT_VALUE  # Store this to avoid repeated access
+        """Process multiple rows with consistent data application."""
+        # Store DEFAULT_VALUE locally
+        DEFAULT_VALUE = self.DEFAULT_VALUE
         
+        # Clean document data once
+        cleaned_extracted = self._clean_extracted_data(extracted_data)
+        
+        # Extract name from documents to match with rows if needed
+        extracted_name = None
         for field in ['name', 'full_name']:
-            if field in extracted_data and extracted_data[field] != DEFAULT_VALUE:
-                extracted_name = extracted_data[field]
+            if field in cleaned_extracted and cleaned_extracted[field] != DEFAULT_VALUE:
+                extracted_name = cleaned_extracted[field]
                 logger.info(f"Found name in documents: {extracted_name}")
                 break
         
         result_rows = []
         
+        # First, check if we need to do name matching
+        need_matching = False
+        if extracted_name and len(excel_data) > 1:
+            # Look for exact match in Excel data
+            exact_match_found = False
+            for idx, row in excel_data.iterrows():
+                first_name = str(row.get('First Name', '')).strip()
+                last_name = str(row.get('Last Name', '')).strip()
+                employee_name = f"{first_name} {last_name}".strip()
+                
+                # Check for exact match
+                if extracted_name.lower() == employee_name.lower():
+                    exact_match_found = True
+                    break
+                    
+            # Only do matching if we found an exact match
+            need_matching = exact_match_found
+            
         # Process each Excel row
         for idx, excel_row in excel_data.iterrows():
             # Clean Excel row
             excel_dict = excel_row.to_dict()
             cleaned_excel = self._clean_excel_data(excel_dict)
             
-            # If we have a name from documents, only apply document data to matching rows
+            # Determine if we should apply document data to this row
             apply_document_data = True
-            if extracted_name:
+            
+            # If we need matching, check if this row matches
+            if need_matching and extracted_name:
                 first_name = str(excel_dict.get('First Name', '')).strip()
                 last_name = str(excel_dict.get('Last Name', '')).strip()
                 employee_name = f"{first_name} {last_name}".strip()
                 
-                # Simple matching - see if names have any common words
-                common_words = set(extracted_name.lower().split()) & set(employee_name.lower().split())
-                apply_document_data = len(common_words) > 0
-                
-                logger.info(f"Row {idx}: {employee_name}, document name: {extracted_name}, common words: {common_words}, apply document data: {apply_document_data}")
+                # Check if names match
+                name_match = extracted_name.lower() == employee_name.lower()
+                if not name_match:
+                    # Try partial matching
+                    common_words = set(extracted_name.lower().split()) & set(employee_name.lower().split())
+                    name_match = len(common_words) > 0
+                    
+                apply_document_data = name_match
+                logger.info(f"Row {idx}: {employee_name}, match with document name '{extracted_name}': {name_match}")
             
-            # Combine row data, conditionally applying document data
-            if apply_document_data:
-                combined_row = self._combine_row_data(extracted_data, cleaned_excel, document_paths)
-            else:
-                # Use only Excel data for non-matching rows
-                combined_row = cleaned_excel
-                
+            # Combine row data
+            combined_row = self._combine_row_data(
+                cleaned_extracted if apply_document_data else {}, 
+                cleaned_excel, 
+                document_paths if apply_document_data else None
+            )
+            
             # Map to template
             mapped_row = self._map_to_template(combined_row, template_columns, field_mappings)
             
-            # Directly process Emirates ID
-            for col in mapped_row:
-                if 'emirates' in col.lower() and 'id' in col.lower():
-                    value = mapped_row[col]
-                    if value and value != DEFAULT_VALUE:
-                        # Format and validate
-                        clean_id = self._format_emirates_id(value)
-                        mapped_row[col] = clean_id
+            # Ensure standard fields are set regardless of document matching
+            # Fill in common mandatory fields for all rows
+            self._apply_standard_fields(mapped_row)
             
-            # Apply mandatory fields
-            mapped_row['Work Country'] = 'United Arab Emirates'
-            mapped_row['Residence Country'] = 'United Arab Emirates'
-            mapped_row['Commission'] = 'NO'
+            # Process emirates_id
+            if 'Emirates Id' in mapped_row and mapped_row['Emirates Id'] != DEFAULT_VALUE:
+                mapped_row['Emirates Id'] = self._format_emirates_id(mapped_row['Emirates Id'])
             
-            # Ensure Middle Name has '.' while other empty fields are truly empty
-            for col in mapped_row:
-                col_lower = col.lower()
-                # Only Middle Name gets default '.'
-                if 'middle' in col_lower and 'name' in col_lower:
-                    if pd.isna(mapped_row[col]) or mapped_row[col] == '' or mapped_row[col] == DEFAULT_VALUE:
-                        mapped_row[col] = '.'
-                # All other fields should be empty rather than '.'
-                elif mapped_row[col] == DEFAULT_VALUE:
-                    mapped_row[col] = ''
-            
+            # Add row to results
             result_rows.append(mapped_row)
         
-        # Create DataFrame from processed rows
-        result_df = pd.DataFrame(result_rows)
+        return pd.DataFrame(result_rows)
         
         # Final check for Emirates ID across all rows
         if 'Emirates Id' in result_df.columns:
@@ -1197,3 +1208,77 @@ class DataCombiner:
         
         # Rename columns that need normalization
         return df.rename(columns=normalized)            
+    
+    def _apply_standard_fields(self, row_data: Dict) -> None:
+        """Apply standard field formatting and defaults to all rows."""
+        # Store DEFAULT_VALUE locally
+        DEFAULT_VALUE = self.DEFAULT_VALUE
+        
+        # Country values
+        row_data['Work Country'] = 'United Arab Emirates'
+        row_data['Residence Country'] = 'United Arab Emirates'
+        row_data['Commission'] = 'NO'
+        
+        # Handle visa issuance emirate and related fields
+        visa_file_number = None
+        if 'Visa File Number' in row_data and row_data['Visa File Number'] != DEFAULT_VALUE:
+            visa_file_number = row_data['Visa File Number']
+        
+        if visa_file_number:
+            # Extract just digits
+            digits = ''.join(filter(str.isdigit, str(visa_file_number)))
+            
+            if digits.startswith('201'):
+                # Dubai values
+                row_data['Visa Issuance Emirate'] = 'Dubai'
+                row_data['Work Emirate'] = 'Dubai'
+                row_data['Residence Emirate'] = 'Dubai'
+                row_data['Work Region'] = 'DUBAI (DISTRICT UNKNOWN)'
+                row_data['Residence Region'] = 'DUBAI (DISTRICT UNKNOWN)'
+                row_data['Member Type'] = 'Expat whose residence issued in Dubai'
+            elif digits.startswith('101'):
+                # Abu Dhabi values
+                row_data['Visa Issuance Emirate'] = 'Abu Dhabi'
+                row_data['Work Emirate'] = 'Abu Dhabi'
+                row_data['Residence Emirate'] = 'Abu Dhabi'
+                row_data['Work Region'] = 'Al Ain City'
+                row_data['Residence Region'] = 'Al Ain City'
+                row_data['Member Type'] = 'Expat whose residence issued other than Dubai'
+            else:
+                # Default values
+                row_data['Member Type'] = 'Expat whose residence issued other than Dubai'
+        
+        # Format Mobile No
+        if 'Mobile No' in row_data and row_data['Mobile No'] != DEFAULT_VALUE:
+            digits = ''.join(filter(str.isdigit, str(row_data['Mobile No'])))
+            if len(digits) >= 9:
+                row_data['Mobile No'] = digits[-9:]
+        
+        # Set company contact from personal contact
+        if 'Mobile No' in row_data and row_data['Mobile No'] != DEFAULT_VALUE:
+            if 'Company Phone' not in row_data or row_data['Company Phone'] == DEFAULT_VALUE:
+                row_data['Company Phone'] = row_data['Mobile No']
+                
+        if 'Email' in row_data and row_data['Email'] != DEFAULT_VALUE:
+            if 'Company Mail' not in row_data or row_data['Company Mail'] == DEFAULT_VALUE:
+                row_data['Company Mail'] = row_data['Email']
+        
+        # Copy Staff ID to Family No if needed
+        if 'Staff ID' in row_data and row_data['Staff ID'] != DEFAULT_VALUE:
+            if 'Family No.' not in row_data or row_data['Family No.'] == DEFAULT_VALUE:
+                row_data['Family No.'] = row_data['Staff ID']
+        
+        # Set Effective Date if missing
+        if 'Effective Date' not in row_data or row_data['Effective Date'] == DEFAULT_VALUE:
+            row_data['Effective Date'] = datetime.now().strftime('%d/%m/%Y')
+        
+        # Ensure Middle Name has '.' while other empty fields are truly empty
+        for col in row_data:
+            col_lower = col.lower()
+            # Only Middle Name gets default '.'
+            if 'middle' in col_lower and 'name' in col_lower:
+                if pd.isna(row_data[col]) or row_data[col] == '' or row_data[col] == DEFAULT_VALUE:
+                    row_data[col] = '.'
+            # All other fields should be empty rather than '.'
+            elif row_data[col] == DEFAULT_VALUE:
+                row_data[col] = ''
