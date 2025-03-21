@@ -26,6 +26,7 @@ from src.services.enhanced_document_processor import EnhancedDocumentProcessorSe
 from src.utils.file_sharer import FileSharer
 from src.utils.teams_notifier import TeamsNotifier
 from src.utils.email_sender import EmailSender
+from src.document_processor.gpt_processor import GPTProcessor
 
 # Import original workflow components
 from src.utils.process_tracker import ProcessTracker
@@ -68,17 +69,17 @@ class WorkflowTester:
         self.attachment_handler = AttachmentHandler()
         self.textract = TextractProcessor()
         try:
-            self.deepseek = DeepseekProcessor()
-            logger.info("DeepSeek processor initialized")
+            self.gpt = GPTProcessor()  # Use GPT instead of DeepSeek
+            logger.info("GPT processor initialized")
         except Exception as e:
-            logger.warning(f"Failed to initialize DeepSeek: {str(e)}")
-            self.deepseek = None
+            logger.warning(f"Failed to initialize GPT: {str(e)}")
+            self.gpt = None
             
-        self.document_processor = EnhancedDocumentProcessorService(self.textract, self.deepseek)
+        self.document_processor = EnhancedDocumentProcessorService(self.textract, self.gpt)
         self.file_sharer = FileSharer()
         
         self.excel_processor = ExcelProcessor()
-        self.data_combiner = DataCombiner(self.textract, self.excel_processor, self.deepseek)
+        self.data_combiner = DataCombiner(self.textract, self.excel_processor, self.gpt)
         self.process_tracker = ProcessTracker()
         self.teams_notifier = TeamsNotifier()
         self.email_sender = EmailSender()
@@ -587,11 +588,35 @@ class WorkflowTester:
             # Build a map of staff ID to name for reference
             staff_id_map = {}
             for row in excel_data:
-                staff_id = str(row.get('staff_id', '')).strip()
-                if staff_id and staff_id != '.':
-                    first_name = str(row.get('first_name', '')).strip() if row.get('first_name', '') != '.' else ''
-                    last_name = str(row.get('last_name', '')).strip() if row.get('last_name', '') != '.' else ''
-                    
+                # Check both lowercase and proper case field names
+                staff_id = None
+                # Try different field name variations for staff ID
+                for field_name in ['staff_id', 'Staff ID', 'StaffID', 'staff id']:
+                    if field_name in row and row[field_name]:
+                        val = str(row.get(field_name, '')).strip()
+                        if val and val != '.':
+                            staff_id = val
+                            break
+                            
+                if staff_id:
+                    # Try different field name variations for first name
+                    first_name = ''
+                    for field_name in ['first_name', 'First Name', 'firstname', 'FirstName']:
+                        if field_name in row:
+                            val = str(row.get(field_name, '')).strip()
+                            if val and val != '.':
+                                first_name = val
+                                break
+                                
+                    # Try different field name variations for last name
+                    last_name = ''
+                    for field_name in ['last_name', 'Last Name', 'lastname', 'LastName']:
+                        if field_name in row:
+                            val = str(row.get(field_name, '')).strip()
+                            if val and val != '.':
+                                last_name = val
+                                break
+                                
                     if first_name or last_name:
                         staff_id_map[staff_id] = {
                             'first_name': first_name,

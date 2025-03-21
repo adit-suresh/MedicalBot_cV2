@@ -75,15 +75,31 @@ class TextractProcessor:
             # Add debug logging
             logger.info(f"Processing document: {file_path}")
             
-            # Preprocess document for better OCR
-            processed_path = self.enhance_document_preprocessing(file_path)
+            # Check file extension
+            file_ext = os.path.splitext(file_path)[1].lower()
             
-            # Use processed document if available
-            if processed_path != file_path:
-                logger.info(f"Using preprocessed document: {processed_path}")
-                path_to_use = processed_path
+            # If PDF, try to convert to image first for better compatibility
+            if file_ext == '.pdf':
+                try:
+                    converted_path = self._convert_pdf_to_image(file_path)
+                    if converted_path and os.path.exists(converted_path):
+                        logger.info(f"Converted PDF to image: {converted_path}")
+                        path_to_use = converted_path
+                    else:
+                        path_to_use = file_path
+                except Exception as e:
+                    logger.warning(f"Failed to convert PDF to image: {str(e)}")
+                    path_to_use = file_path
             else:
-                path_to_use = file_path
+                # Preprocess document for better OCR
+                processed_path = self.enhance_document_preprocessing(file_path)
+                
+                # Use processed document if available
+                if processed_path != file_path:
+                    logger.info(f"Using preprocessed document: {processed_path}")
+                    path_to_use = processed_path
+                else:
+                    path_to_use = file_path
                 
             # Read file efficiently
             file_bytes = self._read_file_bytes(path_to_use)
@@ -1220,3 +1236,32 @@ class TextractProcessor:
         except Exception as e:
             logger.error(f"Error preprocessing document: {str(e)}")
             return file_path
+        
+    def _convert_pdf_to_image(self, pdf_path: str) -> Optional[str]:
+        """Convert PDF to image for better Textract compatibility."""
+        try:
+            from pdf2image import convert_from_path
+            import tempfile
+            
+            # Create output directory
+            output_dir = os.path.join(os.path.dirname(pdf_path), "converted")
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Generate output path
+            base_name = os.path.splitext(os.path.basename(pdf_path))[0]
+            output_path = os.path.join(output_dir, f"{base_name}_converted.jpg")
+            
+            # Convert first page of PDF to image
+            logger.info(f"Converting PDF to image: {pdf_path}")
+            images = convert_from_path(pdf_path, first_page=1, last_page=1, dpi=300)
+            
+            if images:
+                # Save the first page as image
+                images[0].save(output_path, 'JPEG')
+                logger.info(f"Saved converted image to: {output_path}")
+                return output_path
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error converting PDF to image: {str(e)}")
+            return None

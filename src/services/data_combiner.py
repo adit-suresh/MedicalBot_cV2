@@ -787,11 +787,11 @@ class DataCombiner:
             digits = ''.join(filter(str.isdigit, str(visa_number)))
             
             # Check if it starts with specific digits
-            if digits.startswith('201'):
-                logger.info(f"Visa file number {visa_number} starts with 201, setting emirate to Dubai")
+            if digits.startswith('20'):
+                logger.info(f"Visa file number {visa_number} starts with 20, setting emirate to Dubai")
                 combined['visa_issuance_emirate'] = 'Dubai'
-            elif digits.startswith('101'):
-                logger.info(f"Visa file number {visa_number} starts with 101, setting emirate to Abu Dhabi")
+            elif digits.startswith('10'):
+                logger.info(f"Visa file number {visa_number} starts with 10, setting emirate to Abu Dhabi")
                 combined['visa_issuance_emirate'] = 'Abu Dhabi'
         
         # Make sure effective date is set
@@ -866,6 +866,14 @@ class DataCombiner:
                 combined['Work Region'] = 'Al Ain City'
                 combined['Residence Region'] = 'Al Ain City'
                 combined['Member Type'] = 'Expat whose residence issued other than Dubai'
+                
+        if 'effective_date' in combined and 'Effective Date' in combined:
+            # Keep only one effective date field - prefer Effective Date (Excel column)
+            if combined['Effective Date'] != self.DEFAULT_VALUE:
+                combined.pop('effective_date', None)
+            elif combined['effective_date'] != self.DEFAULT_VALUE:
+                combined['Effective Date'] = combined['effective_date']
+                combined.pop('effective_date', None)
 
         # Company phone and email
         if 'mobile_no' in combined and combined['mobile_no'] != self.DEFAULT_VALUE:
