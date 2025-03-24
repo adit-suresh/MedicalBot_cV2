@@ -243,15 +243,22 @@ class GPTProcessor:
             if doc_type == 'passport':
                 extraction_prompt = """
                 Extract the following information from this passport document:
-                - passport_number: The passport number
-                - surname: The last name/surname
-                - given_names: The first and middle names
+                - passport_number: The passport number (very important)
+                - surname: The last name/surname (may be labeled as "Surname")
+                - given_names: The first and middle names (may be labeled as "Given Name(s)")
                 - nationality: The person's nationality
                 - date_of_birth: Birth date in DD/MM/YYYY format
                 - place_of_birth: Place of birth
-                - gender: M or F
+                - gender: Either "Male" or "Female" (may be labeled as "Sex")
                 - date_of_issue: Issue date in DD/MM/YYYY format
                 - date_of_expiry: Expiry date in DD/MM/YYYY format
+                
+                Pay special attention to accurately extracting:
+                1. The passport number
+                2. The surname and given names
+                3. The nationality
+                4. The date of birth
+                5. The gender/sex (report as "Male" or "Female", not as "M" or "F")
                 
                 Return ONLY a clean JSON object with these exact field names. Use "." for any missing fields.
                 """
@@ -271,21 +278,32 @@ class GPTProcessor:
             elif doc_type == 'visa':
                 extraction_prompt = """
                 Extract the following information from this visa/residence permit:
-                - entry_permit_no: The entry permit or visa number
-                - unified_no: The unified number (UID)
-                - visa_file_number: The visa file number (often in format XXX/YYYY/ZZZZZZZ)
+                - entry_permit_no: The entry permit number
+                - unified_no: The unified number (may be labeled as "U.I.D No") (typically a 10-digit number without slashes)
+                - file: The file number (may be labeled as "File" or "File No.")
+                - visa_file_number: The visa file number (should start with 10 or 20, often in format XXX/YYYY/ZZZZZ with slashes, always starts with XXX/YYYY/...)
                 - full_name: The person's full name
                 - nationality: The person's nationality
                 - passport_number: The passport number
                 - date_of_birth: Birth date in DD/MM/YYYY format
-                - gender: M or F
+                - gender: Either "Male" or "Female" (not M or F)
                 - profession: The profession/occupation listed
                 - issue_date: Issue date in DD/MM/YYYY format
                 - expiry_date: Expiry date in DD/MM/YYYY format
                 - sponsor_name: The sponsor's name (employer)
                 
+                Pay special attention to accurately extracting:
+                1. The file number (labeled "File" or "File No.")
+                2. The unified number (typically a 10-digit number WITHOUT slashes)
+                3. The full name
+                4. The passport number
+                5. Gender (report as "Male" or "Female", not as "M" or "F")
+                
+                Visa file number should typically start with '10' or '20'. If you see a "File" field with a value starting with these digits, extract it as visa_file_number.
+                
                 Return ONLY a clean JSON object with these exact field names. Use "." for any missing fields.
                 """
+
             else:
                 extraction_prompt = f"""
                 Extract all important information from this {doc_type} document.
@@ -405,29 +423,74 @@ class GPTProcessor:
         # Format Emirates ID
         if 'emirates_id' in processed:
             processed['emirates_id'] = self._format_emirates_id(processed['emirates_id'])
-        
-        # Document-specific processing
-        if doc_type == 'passport':
-            # Ensure name fields are properly cased
-            for name_field in ['surname', 'given_names', 'full_name']:
-                if name_field in processed and processed[name_field] != self.DEFAULT_VALUE:
-                    processed[name_field] = processed[name_field].title()
             
-            # Standardize gender format
-            if 'gender' in processed:
-                gender = processed['gender'].upper()
-                if gender in ['M', 'MALE']:
-                    processed['gender'] = 'M'
-                elif gender in ['F', 'FEMALE']:
-                    processed['gender'] = 'F'
+        # Validate visa file number format
+        if 'visa_file_number' in processed:
+            visa_file = processed['visa_file_number']
+            
+            # If it doesn't have the expected format or doesn't start with 10/20
+            if '/' not in visa_file or not any(visa_file.startswith(prefix) for prefix in ['10', '20']):
+                # Check if passport number was mistakenly used as visa file number
+                if 'passport_number' in processed and visa_file == processed['passport_number']:
+                    processed['visa_file_number'] = self.DEFAULT_VALUE
+                    logger.info("Cleared visa_file_number as it matched passport_number")
+                
+                # Look for a 'File' field in the raw data
+                if 'file' in data and data['file'] != self.DEFAULT_VALUE:
+                    # Check if it starts with 10 or 20
+                    file_value = str(data['file']).strip()
+                    digits_only = ''.join(filter(str.isdigit, file_value))
+                    if digits_only.startswith(('10', '20')):
+                        processed['visa_file_number'] = file_value
+                        logger.info(f"Using 'file' field as visa_file_number: {file_value}")
         
-        elif doc_type == 'visa':
-            # Copy visa file number to entry permit if missing
-            if 'visa_file_number' in processed and processed['visa_file_number'] != self.DEFAULT_VALUE:
-                if 'entry_permit_no' not in processed or processed['entry_permit_no'] == self.DEFAULT_VALUE:
-                    processed['entry_permit_no'] = processed['visa_file_number']
+        # Format gender to full words
+        if 'gender' in processed:
+            gender = processed['gender'].upper()
+            if gender in ['M', 'MALE']:
+                processed['gender'] = 'Male'
+            elif gender in ['F', 'FEMALE']:
+                processed['gender'] = 'Female'
+                
+        # Validate visa file number format
+        if 'visa_file_number' in processed:
+            visa_file = processed['visa_file_number']
+            
+            # If it doesn't have the expected format or doesn't start with 10/20
+            if '/' not in visa_file or not any(visa_file.startswith(prefix) for prefix in ['10', '20']):
+                # Check if passport number was mistakenly used as visa file number
+                if 'passport_number' in processed and visa_file == processed['passport_number']:
+                    processed['visa_file_number'] = self.DEFAULT_VALUE
+                    logger.info("Cleared visa_file_number as it matched passport_number")
+                
+                # Look for a 'File' field in the raw data
+                if 'file' in data and data['file'] != self.DEFAULT_VALUE:
+                    # Check if it starts with 10 or 20
+                    file_value = str(data['file']).strip()
+                    digits_only = ''.join(filter(str.isdigit, file_value))
+                    if digits_only.startswith(('10', '20')):
+                        processed['visa_file_number'] = file_value
+                        logger.info(f"Using 'file' field as visa_file_number: {file_value}")
+        
+        # Validate and fix unified_no vs visa_file_number
+        if 'unified_no' in processed and 'visa_file_number' in processed:
+            # Check if they might be swapped
+            unified = processed['unified_no']
+            visa_file = processed['visa_file_number']
+            
+            # Unified numbers are typically all digits and around 10 digits long
+            # Visa file numbers typically have format XXX/YYYY/ZZZZZ with slashes
+            
+            # If unified has slashes and visa_file doesn't, they might be swapped
+            if ('/' in unified and '/' not in visa_file and 
+                len(visa_file.replace('-', '').replace(' ', '')) >= 8):
+                # Swap them
+                processed['unified_no'] = visa_file
+                processed['visa_file_number'] = unified
+                logger.info("Swapped unified_no and visa_file_number as they appeared to be mixed up")
         
         return processed
+
     
     def _extract_with_regex(self, content: str, doc_type: str) -> Dict[str, str]:
         """

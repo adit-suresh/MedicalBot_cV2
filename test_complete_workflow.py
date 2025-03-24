@@ -68,6 +68,7 @@ class WorkflowTester:
         self.outlook = OutlookClient()
         self.attachment_handler = AttachmentHandler()
         self.textract = TextractProcessor()
+        self.DEFAULT_VALUE = "."  # Add this line
         try:
             self.gpt = GPTProcessor()  # Use GPT instead of DeepSeek
             logger.info("GPT processor initialized")
@@ -372,25 +373,45 @@ class WorkflowTester:
                 logger.info(f"Processing {len(document_paths)} documents")
                 extracted_data = {}
                 
-                # Debug: Add Textract debugging before processing
-                for doc_type, file_path in document_paths.items():
-                    try:
-                        logger.info(f"Debugging Textract for {doc_type}: {file_path}")
-                        if hasattr(self.textract, 'debug_textract_results'):
-                            debug_text = self.textract.debug_textract_results(file_path, doc_type)
-                            logger.info(f"Completed Textract debugging for {doc_type}")
-                    except Exception as e:
-                        logger.error(f"Error in Textract debugging for {doc_type}: {str(e)}")
+                # Process documents with GPT first if available
+                if self.gpt:
+                    for doc_type, file_path in document_paths.items():
+                        try:
+                            logger.info(f"Processing {doc_type} with GPT: {file_path}")
+                            gpt_data = self.gpt.process_document(file_path, doc_type)
+                            
+                            # Check if GPT extraction was successful
+                            if gpt_data and 'error' not in gpt_data:
+                                logger.info(f"GPT successfully extracted data from {doc_type}")
+                                # Update extracted data, giving priority to GPT results
+                                for key, value in gpt_data.items():
+                                    if key not in extracted_data or value != self.DEFAULT_VALUE:
+                                        extracted_data[key] = value
+                            else:
+                                logger.warning(f"GPT extraction failed for {doc_type}, will try Textract")
+                        except Exception as e:
+                            logger.error(f"Error processing {doc_type} with GPT: {str(e)}", exc_info=True)
+                            logger.warning(f"Will try Textract for {doc_type}")
                 
+                # Also try Textract for any missing fields or if GPT failed
                 for doc_type, file_path in document_paths.items():
                     try:
-                        data = self.textract.process_document(file_path, doc_type)
-                        logger.info(f"Extracted data from {doc_type}: {list(data.keys())}")
-                        extracted_data.update(data)
+                        logger.info(f"Processing {doc_type} with Textract: {file_path}")
+                        textract_data = self.textract.process_document(file_path, doc_type)
+                        
+                        # Update extracted data, but don't overwrite GPT data with default values
+                        for key, value in textract_data.items():
+                            if key not in extracted_data or (value != self.DEFAULT_VALUE and extracted_data[key] == self.DEFAULT_VALUE):
+                                extracted_data[key] = value
+                        
+                        logger.info(f"Extracted data from {doc_type}: {list(textract_data.keys())}")
                     except Exception as e:
-                        logger.error(f"Error processing {doc_type} document: {str(e)}", exc_info=True)
+                        logger.error(f"Error processing {doc_type} document with Textract: {str(e)}", exc_info=True)
                         # Continue with other documents instead of failing
                         logger.warning(f"Continuing with partial data due to document processing error")
+                
+                # Log the combined extracted data
+                logger.info(f"Combined extracted data contains {len(extracted_data)} fields: {list(extracted_data.keys())}")
                 
             except Exception as e:
                 logger.error(f"Error processing documents: {str(e)}", exc_info=True)
@@ -400,13 +421,39 @@ class WorkflowTester:
             try:
                 logger.info(f"Processing {len(excel_files)} Excel files")
                 all_excel_rows = []  # Initialize again to be safe
+                excel_row_identifiers = {}  # Track identifiers for mapping documents to rows
+                
                 for excel_path in excel_files:
                     try:
                         df, errors = self.excel_processor.process_excel(excel_path, dayfirst=True)
                         if not df.empty:
                             # Process all rows
-                            for _, row in df.iterrows():
-                                all_excel_rows.append(row.to_dict())
+                            for idx, row in df.iterrows():
+                                row_dict = row.to_dict()
+                                all_excel_rows.append(row_dict)
+                                
+                                # Create identifier from staff ID, passport number, and/or name
+                                identifier_parts = []
+                                
+                                # Try different field names for key fields
+                                for field_name in ['staff_id', 'Staff ID', 'StaffID']:
+                                    if field_name in row_dict and row_dict[field_name] not in [None, '', '.']:
+                                        identifier_parts.append(str(row_dict[field_name]))
+                                        break
+                                        
+                                for field_name in ['passport_no', 'Passport No', 'passport_number', 'Passport Number']:
+                                    if field_name in row_dict and row_dict[field_name] not in [None, '', '.']:
+                                        identifier_parts.append(str(row_dict[field_name]))
+                                        break
+                                        
+                                for field_name in ['full_name', 'name', 'First Name', 'first_name']:
+                                    if field_name in row_dict and row_dict[field_name] not in [None, '', '.']:
+                                        identifier_parts.append(str(row_dict[field_name]))
+                                        break
+                                
+                                row_id = "_".join(identifier_parts)
+                                excel_row_identifiers[idx] = row_id
+                            
                             logger.info(f"Processed Excel file with {len(df)} rows")
                         if errors:
                             logger.warning(f"Excel validation errors: {errors}")
@@ -420,42 +467,233 @@ class WorkflowTester:
                 logger.error(f"Error processing Excel files: {str(e)}", exc_info=True)
                 raise Exception(f"Failed to process Excel files: {str(e)}")
 
-            # Match documents to specific employees by name
-            if all_excel_rows and len(all_excel_rows) > 1:
-                logger.info(f"Attempting to match documents to {len(all_excel_rows)} employees")
+            # Match documents to specific employees
+            if document_paths and all_excel_rows:
+                logger.info(f"Attempting to match {len(document_paths)} documents to {len(all_excel_rows)} employees")
                 
-                # Get names from documents
-                extracted_name = None
-                for field in ['name', 'full_name']:
-                    DEFAULT_VALUE = "."  # Define it locally
-                    if field in extracted_data and extracted_data[field] != DEFAULT_VALUE:
-                        extracted_name = extracted_data[field]
-                        logger.info(f"Found name in documents: {extracted_name}")
-                        break
-                
-                if extracted_name:
-                    # Find matching employee
-                    best_match_idx = None
-                    best_score = 0
-                    
-                    for idx, row in enumerate(all_excel_rows):
-                        # Get employee name from Excel
-                        first_name = str(row.get('First Name', '')).strip()
-                        last_name = str(row.get('Last Name', '')).strip()
-                        employee_name = f"{first_name} {last_name}".strip()
+                # Process each document to extract data
+                doc_data_by_type = {}
+                for doc_type, file_path in document_paths.items():
+                    try:
+                        # Process with GPT first if available
+                        if self.gpt:
+                            try:
+                                doc_data = self.gpt.process_document(file_path, doc_type)
+                                if 'error' not in doc_data:
+                                    doc_data_by_type[doc_type] = doc_data
+                                    continue
+                            except Exception as e:
+                                logger.warning(f"GPT extraction failed for {doc_type}, using Textract: {str(e)}")
                         
-                        # Calculate similarity
-                        if extracted_name.lower() in employee_name.lower() or employee_name.lower() in extracted_name.lower():
-                            similarity = len(set(extracted_name.lower().split()) & set(employee_name.lower().split()))
-                            if similarity > best_score:
-                                best_score = similarity
-                                best_match_idx = idx
+                        # Fallback to Textract
+                        doc_data = self.textract.process_document(file_path, doc_type)
+                        doc_data_by_type[doc_type] = doc_data
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing {doc_type} document: {str(e)}")
+                
+                # Only do document matching if we have multiple rows
+                if len(all_excel_rows) > 1:
+                    # Extract name from documents for matching
+                    extracted_names = []
+                    for doc_type, doc_data in doc_data_by_type.items():
+                        # Try different name fields
+                        name = None
+                        for field in ['full_name', 'name']:
+                            if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
+                                name = doc_data[field]
+                                break
+                        
+                        # If no direct name field, try surname + given names
+                        if not name and 'surname' in doc_data and 'given_names' in doc_data:
+                            if doc_data['surname'] != self.DEFAULT_VALUE and doc_data['given_names'] != self.DEFAULT_VALUE:
+                                name = f"{doc_data['given_names']} {doc_data['surname']}"
+                        
+                        if name:
+                            extracted_names.append(name)
+                            logger.info(f"Found name in {doc_type}: {name}")
                     
-                    if best_match_idx is not None:
-                        logger.info(f"Matched documents to employee at index {best_match_idx}: {all_excel_rows[best_match_idx].get('First Name', '')} {all_excel_rows[best_match_idx].get('Last Name', '')}")
-                        # Process only the matched employee
-                        matched_employee = all_excel_rows[best_match_idx]
-                        all_excel_rows = [matched_employee]
+                    # If we found names in documents, try to match
+                    if extracted_names:
+                        # Map to track which rows matched
+                        matched_rows = []
+                        matched_indices = set()
+                        unmatched_rows = []
+                        
+                        # For each Excel row, try to find a matching document name
+                        for idx, row in enumerate(all_excel_rows):
+                            # Get employee name from Excel
+                            first_name = str(row.get('First Name', '')).strip()
+                            last_name = str(row.get('Last Name', '')).strip()
+                            employee_name = f"{first_name} {last_name}".strip()
+                            
+                            logger.info(f"Row {idx} employee name from Excel: '{employee_name}', First: '{first_name}', Last: '{last_name}'")
+                            
+                            # Log all document names for debugging
+                            logger.info(f"Document names available for matching: {extracted_names}")
+                            
+                            best_match = None
+                            best_score = 0
+                            
+                            # Compare with each extracted name
+                            for doc_name in extracted_names:
+                                # Calculate similarity
+                                doc_parts = set(doc_name.lower().split())
+                                emp_parts = set(employee_name.lower().split())
+                                common_parts = doc_parts.intersection(emp_parts)
+                                
+                                if common_parts:
+                                    score = len(common_parts) / max(len(doc_parts), len(emp_parts))
+                                    if score > best_score:
+                                        best_score = score
+                                        best_match = doc_name
+                            
+                            # If good match found (threshold 0.3)
+                            if best_match and best_score > 0.3:
+                                logger.info(f"Row {idx} matched to '{best_match}' with score {best_score:.2f}")
+                                
+                                # Create combined row with document data - PRESERVE ORIGINAL NAMES FIRST
+                                combined_row = row.copy()
+                                
+                                # Store original names to ensure they don't get overwritten unless explicitly matched
+                                original_first_name = combined_row.get('First Name', '')
+                                original_last_name = combined_row.get('Last Name', '')
+                                
+                                logger.info(f"Original row data before modification: Last Name: '{original_last_name}', First Name: '{original_first_name}'")
+                                
+                                # Add document data to this row
+                                for doc_type, doc_data in doc_data_by_type.items():
+                                    # Only apply data if it relates to the matched name
+                                    doc_name = None
+                                    for field in ['full_name', 'name']:
+                                        if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
+                                            doc_name = doc_data[field]
+                                            break
+                                    
+                                    if not doc_name and 'surname' in doc_data and 'given_names' in doc_data:
+                                        if doc_data['surname'] != self.DEFAULT_VALUE and doc_data['given_names'] != self.DEFAULT_VALUE:
+                                            doc_name = f"{doc_data['given_names']} {doc_data['surname']}"
+                                    
+                                    # If this document matches the current best match
+                                    if doc_name and doc_name.lower() == best_match.lower():
+                                        # Apply document data to this row
+                                        for key, value in doc_data.items():
+                                            if value != self.DEFAULT_VALUE:
+                                                # Special handling for name fields - BE MORE CAREFUL HERE
+                                                if key == 'full_name':
+                                                    # SKIP updating names if both first and last name already exist and are not empty
+                                                    if original_first_name and original_last_name:
+                                                        logger.info(f"Skipping full_name update as original names exist: {original_first_name} {original_last_name}")
+                                                        continue
+                                                        
+                                                    # Only update name if it's substantially different
+                                                    if len(common_parts) / len(doc_parts) < 0.8:
+                                                        # Try to split full name into parts
+                                                        parts = value.split()
+                                                        if len(parts) >= 2:
+                                                            # Only update if original is empty
+                                                            if not original_first_name:
+                                                                combined_row['First Name'] = parts[0]
+                                                            if not original_last_name:
+                                                                combined_row['Last Name'] = parts[-1]
+                                                            if len(parts) > 2 and 'Middle Name' in combined_row:
+                                                                combined_row['Middle Name'] = ' '.join(parts[1:-1])
+                                                elif key == 'surname':
+                                                    # CRITICAL FIX: Only update surname if the original last name is empty
+                                                    if not original_last_name:
+                                                        logger.info(f"Updating Last Name from empty to '{value}'")
+                                                        combined_row['Last Name'] = value
+                                                    else:
+                                                        logger.info(f"Preserving original Last Name: '{original_last_name}' (ignoring '{value}')")
+                                                elif key == 'given_names':
+                                                    parts = value.split()
+                                                    if parts:
+                                                        # Only update if original is empty
+                                                        if not original_first_name:
+                                                            combined_row['First Name'] = parts[0]
+                                                        if len(parts) > 1 and 'Middle Name' in combined_row:
+                                                            combined_row['Middle Name'] = ' '.join(parts[1:])
+                                                # Other fields mapping - THESE ARE FINE
+                                                elif key == 'passport_number':
+                                                    combined_row['Passport No'] = value
+                                                elif key == 'date_of_birth':
+                                                    combined_row['DOB'] = value
+                                                elif key == 'nationality':
+                                                    combined_row['Nationality'] = value
+                                                elif key == 'gender' or key == 'sex':
+                                                    # Standardize gender format
+                                                    if value.upper() in ['M', 'MALE']:
+                                                        combined_row['Gender'] = 'Male'
+                                                    elif value.upper() in ['F', 'FEMALE']:
+                                                        combined_row['Gender'] = 'Female'
+                                                elif key == 'unified_no':
+                                                    combined_row['Unified No'] = value
+                                                elif key == 'visa_file_number' or key == 'entry_permit_no':
+                                                    combined_row['Visa File Number'] = value
+                                
+                                # Verify names after processing
+                                logger.info(f"Final row data after modification: Last Name: '{combined_row.get('Last Name', '')}', First Name: '{combined_row.get('First Name', '')}'")
+                                
+                                matched_rows.append(combined_row)
+                                matched_indices.add(idx)
+                                logger.info(f"Matched row {idx}: {employee_name} to document name: {best_match}")
+                            else:
+                                # Keep row as is if no good match
+                                unmatched_rows.append(row)
+                                logger.info(f"No good match for row {idx}: {employee_name}")
+                        
+                        # Combine matched and unmatched rows
+                        processed_rows = matched_rows + unmatched_rows
+                        
+                        # Only use processed rows if we successfully matched at least one row
+                        if matched_rows:
+                            logger.info(f"Successfully matched {len(matched_rows)} rows out of {len(all_excel_rows)}")
+                            all_excel_rows = processed_rows
+                        else:
+                            logger.warning("No rows successfully matched with documents, using original Excel data")
+                    else:
+                        logger.warning("No names found in documents for matching")
+
+                # Apply document data to all rows if we only have one row or couldn't match
+                else:
+                    logger.info("Only one Excel row or no matching performed, applying document data directly")
+                    # Combine all document data
+                    combined_doc_data = {}
+                    for doc_data in doc_data_by_type.values():
+                        for key, value in doc_data.items():
+                            if value != self.DEFAULT_VALUE:
+                                combined_doc_data[key] = value
+                    
+                    # Apply to each row
+                    for i, row in enumerate(all_excel_rows):
+                        # Only apply non-name fields to avoid overwriting names
+                        for key, value in combined_doc_data.items():
+                            # Skip name fields
+                            if key not in ['full_name', 'name', 'surname', 'given_names']:
+                                # Apply mappings for other fields
+                                if key == 'passport_number':
+                                    row['Passport No'] = value
+                                elif key == 'date_of_birth':
+                                    row['DOB'] = value
+                                elif key == 'nationality':
+                                    row['Nationality'] = value
+                                elif key == 'gender' or key == 'sex':
+                                    # Standardize gender format
+                                    if value.upper() in ['M', 'MALE']:
+                                        row['Gender'] = 'Male'
+                                    elif value.upper() in ['F', 'FEMALE']:
+                                        row['Gender'] = 'Female'
+                                elif key == 'unified_no':
+                                    row['Unified No'] = value
+                                elif key == 'visa_file_number' or key == 'entry_permit_no':
+                                    row['Visa File Number'] = value
+                
+                # Extract common data for use in other parts of the workflow
+                extracted_data = {}
+                for doc_data in doc_data_by_type.values():
+                    for key, value in doc_data.items():
+                        if value != self.DEFAULT_VALUE:
+                            extracted_data[key] = value
 
             # Rename client files based on Excel data
             if all_excel_rows:
@@ -481,7 +719,7 @@ class WorkflowTester:
                 result = self.data_combiner.combine_and_populate_template(
                     template_path,
                     output_path,
-                    extracted_data,
+                    extracted_data,  # This now contains combined GPT and Textract data
                     all_excel_rows if all_excel_rows else None,
                     document_paths
                 )
@@ -490,6 +728,7 @@ class WorkflowTester:
             except Exception as e:
                 logger.error(f"Error combining data: {str(e)}", exc_info=True)
                 raise Exception(f"Failed to combine data: {str(e)}")
+
 
             # Step 8: Save submission
             try:
@@ -1104,6 +1343,58 @@ class WorkflowTester:
         except Exception as e:
             logger.error(f"Error creating debug report: {str(e)}")
             return None
+        
+    def _combine_data_for_row(self, row_data, extracted_data, document_matches):
+        """Combine Excel row data with extracted document data."""
+        combined = row_data.copy()
+        
+        # Priority fields from different document types
+        passport_fields = ['passport_number', 'surname', 'given_names', 'nationality', 'date_of_birth', 'sex', 'gender']
+        visa_fields = ['entry_permit_no', 'unified_no', 'visa_file_number', 'sponsor_name', 'profession']
+        
+        # Apply document data based on priority
+        for field, value in extracted_data.items():
+            if value == self.DEFAULT_VALUE:
+                continue
+                
+            # Handle passport fields with highest priority
+            if field in passport_fields:
+                # Map to Excel column names
+                if field == 'passport_number':
+                    combined['passport_no'] = value
+                    combined['Passport No'] = value
+                elif field == 'surname':
+                    combined['last_name'] = value
+                    combined['Last Name'] = value
+                elif field == 'given_names':
+                    combined['first_name'] = value
+                    combined['First Name'] = value
+                elif field == 'nationality':
+                    combined['nationality'] = value
+                    combined['Nationality'] = value
+                elif field == 'date_of_birth':
+                    combined['dob'] = value
+                    combined['DOB'] = value
+                elif field in ['gender', 'sex']:
+                    combined['Gender'] = value
+            
+            # Handle visa fields
+            elif field in visa_fields:
+                if field == 'entry_permit_no' or field == 'visa_file_number':
+                    combined['visa_file_number'] = value
+                    combined['Visa File Number'] = value
+                elif field == 'unified_no':
+                    combined['unified_no'] = value
+                    combined['Unified No'] = value
+                elif field == 'sponsor_name':
+                    combined['sponsor'] = value
+                    combined['Sponsor'] = value
+                elif field == 'profession':
+                    combined['profession'] = value
+                    combined['Profession'] = value
+                    combined['Occupation'] = value
+        
+        return combined
 
 # Configure logging
 logging.basicConfig(

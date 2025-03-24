@@ -324,12 +324,27 @@ class DataCombiner:
                     'normalized_name': self._normalize_column_name(col),
                     'required': col.endswith('*')
                 }
-                
+            
+            # Check for duplicate field names with different case
+            column_names = template_df.columns.tolist()
+            lowercase_map = {}
+            for col in column_names:
+                col_lower = col.lower()
+                if col_lower in lowercase_map:
+                    logger.warning(f"Template has duplicate field names with different case: '{col}' and '{lowercase_map[col_lower]}'")
+                    # Record which one appears first (lower index) to keep that one
+                    if column_names.index(col) < column_names.index(lowercase_map[col_lower]):
+                        lowercase_map[col_lower] = col
+                else:
+                    lowercase_map[col_lower] = col
+            
+            # Create template info dictionary
             template_info = {
                 'columns': template_df.columns.tolist(),
                 'column_info': column_info,
                 'column_count': len(template_df.columns),
-                'last_modified': os.path.getmtime(template_path)
+                'last_modified': os.path.getmtime(template_path),
+                'case_normalized_columns': lowercase_map  # Add the new field here
             }
             
             # Cache the result
@@ -578,6 +593,98 @@ class DataCombiner:
         
         # Debug logging
         logger.info(f"Combining data: {len(extracted)} extracted fields, {len(excel)} excel fields")
+        
+        # Document-specific priority rules based on document type
+        passport_priority_fields = ['passport_number', 'passport_no', 'surname', 'given_names', 
+                                'first_name', 'last_name', 'nationality', 'date_of_birth', 'gender', 'sex']
+                                
+        visa_priority_fields = ['entry_permit_no', 'unified_no', 'visa_file_number', 'full_name',
+                            'sponsor_name', 'profession', 'visa_type']
+        
+        # Determine document type from extracted fields
+        doc_type = None
+        if 'passport_number' in extracted and extracted['passport_number'] != self.DEFAULT_VALUE:
+            doc_type = 'passport'
+        elif 'emirates_id' in extracted and extracted['emirates_id'] != self.DEFAULT_VALUE:
+            doc_type = 'emirates_id'
+        elif any(key in extracted and extracted[key] != self.DEFAULT_VALUE for key in ['entry_permit_no', 'visa_file_number', 'unified_no']):
+            doc_type = 'visa'
+            
+        logger.info(f"Detected document type: {doc_type}")
+        
+        # Apply document-specific priorities
+        if doc_type == 'passport':
+            # Give passport fields highest priority
+            for field in passport_priority_fields:
+                if field in extracted and extracted[field] != self.DEFAULT_VALUE:
+                    # Map field to Excel columns
+                    if field == 'passport_number':
+                        combined['passport_no'] = extracted[field]
+                        combined['Passport No'] = extracted[field]
+                    elif field == 'passport_no':
+                        combined['passport_number'] = extracted[field]
+                        combined['Passport No'] = extracted[field]
+                    elif field == 'given_names':
+                        combined['first_name'] = extracted[field]
+                        combined['First Name'] = extracted[field]
+                    elif field == 'surname':
+                        combined['last_name'] = extracted[field]
+                        combined['Last Name'] = extracted[field]
+                    elif field == 'date_of_birth':
+                        combined['dob'] = extracted[field]
+                        combined['DOB'] = extracted[field]
+                    elif field == 'gender' or field == 'sex':
+                        combined['gender'] = extracted[field]
+                        combined['Gender'] = extracted[field]
+                    else:
+                        # Direct field mapping
+                        combined[field] = extracted[field]
+                        # Also try Excel column names
+                        excel_field = field.replace('_', ' ').title()
+                        combined[excel_field] = extracted[field]
+        
+        elif doc_type == 'visa':
+            # For visa documents, prioritize visa-specific fields but maintain passport info if already present
+            for field in visa_priority_fields:
+                if field in extracted and extracted[field] != self.DEFAULT_VALUE:
+                    if field == 'entry_permit_no':
+                        combined['entry_permit_no'] = extracted[field]
+                        combined['Visa File Number'] = extracted[field]
+                    elif field == 'visa_file_number':
+                        combined['visa_file_number'] = extracted[field]
+                        combined['Visa File Number'] = extracted[field]
+                        combined['entry_permit_no'] = extracted[field]
+                    elif field == 'unified_no':
+                        combined['unified_no'] = extracted[field]
+                        combined['Unified No'] = extracted[field]
+                    elif field == 'full_name':
+                        # Only use if we don't have first and last name already
+                        if ('first_name' not in combined or combined['first_name'] == self.DEFAULT_VALUE) and \
+                        ('last_name' not in combined or combined['last_name'] == self.DEFAULT_VALUE):
+                            self._split_full_name(extracted[field], combined)
+                    else:
+                        # Direct field mapping
+                        combined[field] = extracted[field]
+                        # Also try Excel column names
+                        excel_field = field.replace('_', ' ').title()
+                        combined[excel_field] = extracted[field]
+                        
+            # For common fields that appear in both passport and visa, use visa data only if passport data not available
+            common_fields = ['passport_number', 'nationality', 'date_of_birth', 'gender']
+            for field in common_fields:
+                if field in extracted and extracted[field] != self.DEFAULT_VALUE:
+                    # Only use if not already populated by passport
+                    if field not in combined or combined[field] == self.DEFAULT_VALUE:
+                        if field == 'passport_number':
+                            combined['passport_no'] = extracted[field]
+                            combined['Passport No'] = extracted[field]
+                        elif field == 'date_of_birth':
+                            combined['dob'] = extracted[field]
+                            combined['DOB'] = extracted[field]
+                        else:
+                            combined[field] = extracted[field]
+                            excel_field = field.replace('_', ' ').title()
+                            combined[excel_field] = extracted[field]
         
         # First, format Emirates ID in Excel data if present
         if 'emirates_id' in combined and combined['emirates_id'] != self.DEFAULT_VALUE:
@@ -891,6 +998,15 @@ class DataCombiner:
         if 'Email' in combined and combined['Email'] != self.DEFAULT_VALUE:
             if 'Company Mail' not in combined or combined['Company Mail'] == self.DEFAULT_VALUE:
                 combined['Company Mail'] = combined['Email']
+        
+        # Make sure effective date is set only in the correct field
+        if 'effective_date' in combined and 'Effective Date' in combined:
+            # If Effective Date is empty but effective_date has value, use it
+            if combined['Effective Date'] == self.DEFAULT_VALUE and combined['effective_date'] != self.DEFAULT_VALUE:
+                combined['Effective Date'] = combined['effective_date']
+            # Always remove lowercase version to avoid duplication
+            combined.pop('effective_date', None)
+            logger.info("Removed duplicate 'effective_date' field")
                 
         return combined
 
@@ -992,6 +1108,15 @@ class DataCombiner:
                 field_mappings[col] = None
                 
             mapped[col] = self._format_output_value(mapped_value, normalized_col)
+            
+        # Check for and remove duplicate Effective Date at end
+        for key in list(mapped.keys()):
+            if key != 'Effective Date' and key.lower() == 'effective date':
+                # Remove the duplicate
+                logger.info(f"Removing duplicate Effective Date field: {key}")
+                mapped.pop(key)
+                if key in field_mappings:
+                    field_mappings.pop(key)
                     
         return mapped
 
