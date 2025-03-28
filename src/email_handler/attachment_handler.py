@@ -134,6 +134,19 @@ class AttachmentHandler:
             # Clean and sanitize filename
             original_name = attachment.get("name", "unknown_file")
             safe_name = self._sanitize_filename(original_name)
+            
+             # IMPORTANT FIX: Limit directory name length for Windows path limitation
+            if len(email_dir) > 100:  # Truncate long directory paths
+                # Create a shorter hash-based directory name
+                short_email_id = hashlib.md5(email_id.encode()).hexdigest()[:10]
+                email_dir = os.path.join(self.download_dir, f"{short_email_id}_{timestamp}")
+                os.makedirs(email_dir, exist_ok=True)
+                
+            # ALSO: Ensure filename is not too long
+            if len(safe_name) > 50:  # Limit filename length
+                name_parts = os.path.splitext(safe_name)
+                safe_name = name_parts[0][:40] + name_parts[1]  # Keep extension, limit base name
+            
             file_path = os.path.join(email_dir, safe_name)
             
             logger.info(f"Saving attachment {original_name} to {file_path}")

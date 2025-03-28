@@ -316,7 +316,7 @@ class WorkflowTester:
         
         try:
             # Create submission directory
-            submission_dir = os.path.join("processed_submissions", process_id)
+            submission_dir = os.path.join("processed_submissions", re.sub(r'[^a-zA-Z0-9]', '_', process_id)[:50])
             os.makedirs(submission_dir, exist_ok=True)
             
             # Step 2: Get and save attachments
