@@ -530,7 +530,7 @@ class WorkflowTester:
                         if self.gpt:
                             try:
                                 doc_data = self.gpt.process_document(file_path, doc_type)
-                                if 'error' not in doc_data:
+                                if doc_data and 'error' not in doc_data:
                                     doc_data_by_type[doc_type] = doc_data
                                     continue
                             except Exception as e:
@@ -546,116 +546,196 @@ class WorkflowTester:
                 # CRITICAL FIX: Process each row individually with its own copy of data
                 processed_rows = []
                 
-                for idx, row in enumerate(all_excel_rows):
-                    # Create a deep copy of the row to ensure no reference sharing
-                    row_copy = copy.deepcopy(row)
-                    
-                    # Get employee identifiers for matching
-                    first_name = str(row_copy.get('First Name', '')).strip()
-                    last_name = str(row_copy.get('Last Name', '')).strip()
-                    employee_name = f"{first_name} {last_name}".strip()
-                    staff_id = str(row_copy.get('Staff ID', '')).strip()
-                    passport_no = str(row_copy.get('Passport No', '')).strip()
-                    
-                    logger.info(f"Processing row {idx}: Name='{employee_name}', Staff ID='{staff_id}', Passport No='{passport_no}'")
-                    
-                    # Try to match this employee to document data
-                    doc_match_found = False
-                    
-                    # Match using name, passport number, or any other identifying field
-                    for doc_type, doc_data in doc_data_by_type.items():
-                        # Try to match this row to this document
-                        match_score = 0
-                        
-                        # Check passport number match (highest priority)
-                        if 'passport_number' in doc_data and doc_data['passport_number'] != self.DEFAULT_VALUE:
-                            if passport_no and doc_data['passport_number'].lower() == passport_no.lower():
-                                match_score += 100  # High score for passport match
-                                logger.info(f"Matched row {idx} to {doc_type} by passport number")
-                        
-                        # Check name match (medium priority)
-                        doc_name = None
-                        for field in ['full_name', 'name']:
-                            if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
-                                doc_name = doc_data[field]
-                                break
-                        
-                        if doc_name and employee_name:
-                            # Calculate name similarity
-                            doc_parts = set(doc_name.lower().split())
-                            emp_parts = set(employee_name.lower().split())
-                            common_parts = doc_parts.intersection(emp_parts)
-                            
-                            if common_parts:
-                                similarity = len(common_parts) / max(len(doc_parts), len(emp_parts))
-                                match_score += int(similarity * 50)  # Medium score for name match
-                                logger.info(f"Matched row {idx} to {doc_type} by name with score {similarity:.2f}")
-                        
-                        # If this document appears to match this employee
-                        if match_score >= 30:  # Threshold for considering a match
-                            doc_match_found = True
-                            
-                            # Apply document data to this row
-                            for key, value in doc_data.items():
-                                if value != self.DEFAULT_VALUE:
-                                    # Skip name fields since we're using Excel data
-                                    if key in ['full_name', 'name', 'surname', 'given_names']:
-                                        continue
-                                        
-                                    # Map document fields to Excel fields
-                                    if key == 'passport_number':
-                                        row_copy['Passport No'] = value
-                                    elif key == 'date_of_birth':
-                                        row_copy['DOB'] = value
-                                    elif key == 'nationality':
-                                        row_copy['Nationality'] = value
-                                    elif key == 'gender' or key == 'sex':
-                                        if value.upper() in ['M', 'MALE']:
-                                            row_copy['Gender'] = 'Male'
-                                        elif value.upper() in ['F', 'FEMALE']:
-                                            row_copy['Gender'] = 'Female'
-                                    elif key == 'emirates_id':
-                                        row_copy['Emirates Id'] = value
-                                    elif key == 'unified_no':
-                                        row_copy['Unified No'] = value
-                                    elif key == 'visa_file_number' or key == 'entry_permit_no':
-                                        row_copy['Visa File Number'] = value
-                                    elif key == 'mobile_no' or key == 'mobile':
-                                        # Only update if Mobile No is empty
-                                        if 'Mobile No' not in row_copy or not row_copy['Mobile No'] or row_copy['Mobile No'] == self.DEFAULT_VALUE:
-                                            row_copy['Mobile No'] = value
-                                            
-                                        # Only copy to Company Phone if empty
-                                        if 'Company Phone' not in row_copy or not row_copy['Company Phone'] or row_copy['Company Phone'] == self.DEFAULT_VALUE:
-                                            row_copy['Company Phone'] = value
-                                    elif key == 'email':
-                                        # Only update if Email is empty
-                                        if 'Email' not in row_copy or not row_copy['Email'] or row_copy['Email'] == self.DEFAULT_VALUE:
-                                            row_copy['Email'] = value
-                                            
-                                        # Only copy to Company Mail if empty
-                                        if 'Company Mail' not in row_copy or not row_copy['Company Mail'] or row_copy['Company Mail'] == self.DEFAULT_VALUE:
-                                            row_copy['Company Mail'] = value
-                    
-                    # IMPORTANT: Add this row to processed rows whether it matched or not
-                    processed_rows.append(row_copy)
-                    logger.info(f"Added row {idx} to processed rows. Doc match found: {doc_match_found}")
+                # Create an array for diagnostic information about document matches
+                doc_matches = []
                 
-                # CRITICAL: Verify we haven't lost any rows
+                # First pass: Extract key identifiers from documents
+                document_identifiers = []
+                for doc_type, doc_data in doc_data_by_type.items():
+                    doc_id = {}
+                    doc_id['type'] = doc_type
+                    
+                    # Get name from document
+                    for name_field in ['full_name', 'name']:
+                        if name_field in doc_data and doc_data[name_field] != self.DEFAULT_VALUE:
+                            doc_id['name'] = doc_data[name_field]
+                            break
+                            
+                    # Get passport number
+                    if 'passport_number' in doc_data and doc_data['passport_number'] != self.DEFAULT_VALUE:
+                        doc_id['passport'] = doc_data['passport_number']
+                        
+                    # Get ID number
+                    if 'emirates_id' in doc_data and doc_data['emirates_id'] != self.DEFAULT_VALUE:
+                        doc_id['id'] = doc_data['emirates_id']
+                        
+                    # Add other identifiers as needed
+                    document_identifiers.append(doc_id)
+                    
+                logger.info(f"Extracted {len(document_identifiers)} document identifiers")
+                
+                # Second pass: Process EACH ROW INDIVIDUALLY
+                for idx, original_row in enumerate(all_excel_rows):
+                    # CRITICAL: Create a NEW deep copy for this row
+                    row_copy = copy.deepcopy(original_row)
+                    
+                    # Log this row's key identifiers for matching
+                    row_passport = str(row_copy.get('Passport No', '')).strip()
+                    row_first_name = str(row_copy.get('First Name', '')).strip()
+                    row_last_name = str(row_copy.get('Last Name', '')).strip()
+                    row_name = f"{row_first_name} {row_last_name}".strip()
+                    row_id = str(row_copy.get('Emirates Id', '')).strip()
+                    
+                    logger.info(f"Processing row {idx+1}/{len(all_excel_rows)}: Name='{row_name}', Passport='{row_passport}', ID='{row_id}'")
+                    
+                    # Track if we found a match for this row
+                    match_found = False
+                    match_doc_type = None
+                    match_score = 0
+                    
+                    # For each row, scan ALL document data to find the best match
+                    for doc_type, doc_data in doc_data_by_type.items():
+                        current_score = 0
+                        
+                        # Check passport number (strongest match)
+                        if 'passport_number' in doc_data and doc_data['passport_number'] != self.DEFAULT_VALUE:
+                            doc_passport = doc_data['passport_number']
+                            if row_passport and doc_passport.lower() == row_passport.lower():
+                                current_score += 100  # Strong passport match
+                                logger.info(f"STRONG MATCH (Passport): Row {idx+1} matches {doc_type}")
+                        
+                        # Check name (medium strength match)
+                        doc_name = None
+                        for name_field in ['full_name', 'name']:
+                            if name_field in doc_data and doc_data[name_field] != self.DEFAULT_VALUE:
+                                doc_name = doc_data[name_field]
+                                break
+                                
+                        if doc_name and row_name:
+                            # Calculate name similarity
+                            doc_words = set(doc_name.lower().split())
+                            row_words = set(row_name.lower().split())
+                            common_words = doc_words.intersection(row_words)
+                            
+                            if common_words:
+                                name_similarity = len(common_words) / max(len(doc_words), len(row_words))
+                                current_score += int(name_similarity * 50)  # Name match score
+                                logger.info(f"NAME MATCH: Row {idx+1} matches {doc_type} with similarity {name_similarity:.2f}")
+                        
+                        # Check Emirates ID (strong match)
+                        if 'emirates_id' in doc_data and doc_data['emirates_id'] != self.DEFAULT_VALUE:
+                            doc_id = doc_data['emirates_id']
+                            if row_id and doc_id.replace('-', '') == row_id.replace('-', ''):
+                                current_score += 100  # Strong ID match
+                                logger.info(f"STRONG MATCH (ID): Row {idx+1} matches {doc_type}")
+                        
+                        # If this document is a better match, save it
+                        if current_score > match_score:
+                            match_score = current_score
+                            match_doc_type = doc_type
+                            match_found = True
+                    
+                    # If we found a match for this row
+                    if match_found and match_score >= 30:  # Threshold for considering a match
+                        logger.info(f"MATCH FOUND: Row {idx+1} matches document {match_doc_type} (score: {match_score})")
+                        
+                        # Apply the matched document data to this row
+                        matched_data = doc_data_by_type[match_doc_type]
+                        
+                        # Add to match diagnostics
+                        doc_matches.append({
+                            'row_idx': idx,
+                            'row_name': row_name,
+                            'doc_type': match_doc_type,
+                            'score': match_score,
+                            'matched_fields': []
+                        })
+                        
+                        # Apply document data fields to this row
+                        for key, value in matched_data.items():
+                            if value != self.DEFAULT_VALUE:
+                                # Skip name fields - maintain Excel names
+                                if key in ['full_name', 'name', 'surname', 'given_names']:
+                                    continue
+                                    
+                                # Apply field mappings
+                                if key == 'passport_number':
+                                    row_copy['Passport No'] = value
+                                    doc_matches[-1]['matched_fields'].append(f"Passport: {value}")
+                                elif key == 'date_of_birth':
+                                    row_copy['DOB'] = value
+                                    doc_matches[-1]['matched_fields'].append(f"DOB: {value}")
+                                elif key == 'nationality':
+                                    row_copy['Nationality'] = value
+                                    doc_matches[-1]['matched_fields'].append(f"Nationality: {value}")
+                                elif key == 'gender' or key == 'sex':
+                                    if value.upper() in ['M', 'MALE']:
+                                        row_copy['Gender'] = 'Male'
+                                    elif value.upper() in ['F', 'FEMALE']:
+                                        row_copy['Gender'] = 'Female'
+                                    doc_matches[-1]['matched_fields'].append(f"Gender: {row_copy['Gender']}")
+                                elif key == 'emirates_id':
+                                    row_copy['Emirates Id'] = value
+                                    doc_matches[-1]['matched_fields'].append(f"Emirates Id: {value}")
+                                elif key == 'unified_no':
+                                    row_copy['Unified No'] = value
+                                    doc_matches[-1]['matched_fields'].append(f"Unified No: {value}")
+                                elif key == 'visa_file_number' or key == 'entry_permit_no':
+                                    row_copy['Visa File Number'] = value
+                                    doc_matches[-1]['matched_fields'].append(f"Visa File: {value}")
+                                elif key == 'mobile_no' or key == 'mobile':
+                                    row_copy['Mobile No'] = value
+                                    
+                                    # Only copy to Company Phone if it's empty
+                                    if ('Company Phone' not in row_copy or 
+                                        not row_copy['Company Phone'] or 
+                                        row_copy['Company Phone'] == self.DEFAULT_VALUE or
+                                        str(row_copy['Company Phone']).strip() == ''):
+                                        row_copy['Company Phone'] = value
+                                        
+                                    doc_matches[-1]['matched_fields'].append(f"Mobile: {value}")
+                                elif key == 'email':
+                                    row_copy['Email'] = value
+                                    
+                                    # Only copy to Company Mail if it's empty
+                                    if ('Company Mail' not in row_copy or 
+                                        not row_copy['Company Mail'] or 
+                                        row_copy['Company Mail'] == self.DEFAULT_VALUE or
+                                        str(row_copy['Company Mail']).strip() == ''):
+                                        row_copy['Company Mail'] = value
+                                        
+                                    doc_matches[-1]['matched_fields'].append(f"Email: {value}")
+                    else:
+                        logger.info(f"NO MATCH FOUND for row {idx+1} - Using original Excel data only")
+                    
+                    # Add this row's copy to the processed rows
+                    processed_rows.append(row_copy)
+                
+                # VERIFY we have the same number of rows
                 if len(processed_rows) != len(all_excel_rows):
                     logger.error(f"ROW COUNT MISMATCH! Original: {len(all_excel_rows)}, Processed: {len(processed_rows)}")
+                    # If count mismatch, fall back to original rows to be safe
+                    all_excel_rows = [copy.deepcopy(row) for row in all_excel_rows]
                 else:
-                    logger.info(f"Row count verified: {len(processed_rows)} rows processed")
+                    # Replace with properly processed rows
+                    all_excel_rows = processed_rows
+                    logger.info(f"Successfully processed all {len(processed_rows)} rows")
                 
-                # Replace original rows with processed ones
-                all_excel_rows = processed_rows
-                
-                # Extract common data for use in other parts of the workflow
+                # Save match diagnostics for debugging
+                try:
+                    with open('document_matches.json', 'w') as f:
+                        json.dump(doc_matches, f, indent=2, default=str)
+                    logger.info(f"Saved document matching diagnostics to document_matches.json")
+                except:
+                    logger.warning("Failed to save document matching diagnostics")
+                    
+                # Extract common data for other parts of the workflow
                 extracted_data = {}
                 for doc_data in doc_data_by_type.values():
                     for key, value in doc_data.items():
                         if value != self.DEFAULT_VALUE:
                             extracted_data[key] = value
+
 
             # Rename client files based on Excel data
             if all_excel_rows:
