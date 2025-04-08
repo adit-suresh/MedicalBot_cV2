@@ -369,108 +369,133 @@ class DataCombiner:
         # Store DEFAULT_VALUE locally
         DEFAULT_VALUE = self.DEFAULT_VALUE
         
+        # Add detailed logging for debugging
+        logger.info("=" * 80)
+        logger.info("MULTI-ROW PROCESSING DIAGNOSTICS")
+        logger.info("=" * 80)
+        logger.info(f"Excel data: {len(excel_data)} rows")
+        logger.info(f"Extracted data: {len(extracted_data)} fields")
+        if len(extracted_data) > 0:
+            logger.info("Key extracted fields:")
+            important_fields = ['passport_number', 'passport_no', 'emirates_id', 'unified_no', 
+                            'first_name', 'last_name', 'full_name', 'nationality']
+            for field in important_fields:
+                if field in extracted_data and extracted_data[field] != DEFAULT_VALUE:
+                    logger.info(f"  - {field}: {extracted_data[field]}")
+        
         # Clean document data once
         cleaned_extracted = self._clean_extracted_data(extracted_data)
         
-        # Log available document data
-        logger.info(f"Document data available for matching: {list(cleaned_extracted.keys())}")
-        for key, value in cleaned_extracted.items():
-            if value != DEFAULT_VALUE:
-                logger.info(f"  - {key}: {value}")
+        # CRITICAL FIX: Add fallback for empty extracted data
+        if not cleaned_extracted or all(value == DEFAULT_VALUE for value in cleaned_extracted.values()):
+            logger.warning("No useful data found in extracted_data! Using simplified processing")
+            
+            # Just process each Excel row with minimal processing
+            result_rows = []
+            for _, excel_row in excel_data.iterrows():
+                excel_dict = excel_row.to_dict()
+                cleaned_excel = self._clean_excel_data(excel_dict)
+                
+                # Map to template
+                mapped_row = self._map_to_template(cleaned_excel, template_columns, field_mappings)
+                
+                # Apply standard fields
+                self._apply_standard_fields(mapped_row)
+                
+                result_rows.append(mapped_row)
+            
+            # Create DataFrame and return
+            return pd.DataFrame(result_rows)
         
-        # Extract identifiers from documents for matching
+        # If we have data, proceed with normal processing
+        # Extract key identifiers from documents for matching
         extracted_identifiers = {
             'name': None,
             'passport': None,
             'emirates_id': None,
             'unified_no': None,
-            'visa_file_number': None,
-            'nationality': None,
-            'dob': None
+            'nationality': None
         }
         
-        # Get full name or name components
+        # Get full name from documents
         for field in ['full_name', 'name']:
             if field in cleaned_extracted and cleaned_extracted[field] != DEFAULT_VALUE:
                 extracted_identifiers['name'] = cleaned_extracted[field]
+                logger.info(f"Found name in documents: {extracted_identifiers['name']}")
                 break
         
         # If no full name but have first/last components, combine them
         if not extracted_identifiers['name']:
-            first_name = cleaned_extracted.get('first_name', '')
-            last_name = cleaned_extracted.get('last_name', '')
+            first_name = cleaned_extracted.get('first_name', DEFAULT_VALUE)
+            last_name = cleaned_extracted.get('last_name', DEFAULT_VALUE)
             if first_name != DEFAULT_VALUE and last_name != DEFAULT_VALUE:
                 extracted_identifiers['name'] = f"{first_name} {last_name}".strip()
+                logger.info(f"Constructed name from components: {extracted_identifiers['name']}")
         
         # Get passport number
         for field in ['passport_number', 'passport_no']:
             if field in cleaned_extracted and cleaned_extracted[field] != DEFAULT_VALUE:
                 extracted_identifiers['passport'] = cleaned_extracted[field]
+                logger.info(f"Found passport in documents: {extracted_identifiers['passport']}")
                 break
         
         # Get Emirates ID
         for field in ['emirates_id', 'eid']:
             if field in cleaned_extracted and cleaned_extracted[field] != DEFAULT_VALUE:
                 extracted_identifiers['emirates_id'] = cleaned_extracted[field]
+                logger.info(f"Found Emirates ID in documents: {extracted_identifiers['emirates_id']}")
                 break
         
-        # Get Unified Number
-        for field in ['unified_no', 'unified_number', 'u.i.d._no.']:
+        # Get unified number
+        for field in ['unified_no', 'unified_number']:
             if field in cleaned_extracted and cleaned_extracted[field] != DEFAULT_VALUE:
                 extracted_identifiers['unified_no'] = cleaned_extracted[field]
+                logger.info(f"Found Unified No in documents: {extracted_identifiers['unified_no']}")
                 break
         
-        # Get Visa File Number
-        for field in ['visa_file_number', 'entry_permit_no', 'visa_number']:
-            if field in cleaned_extracted and cleaned_extracted[field] != DEFAULT_VALUE:
-                extracted_identifiers['visa_file_number'] = cleaned_extracted[field]
-                break
-        
-        # Get Nationality
+        # Get nationality
         if 'nationality' in cleaned_extracted and cleaned_extracted['nationality'] != DEFAULT_VALUE:
             extracted_identifiers['nationality'] = cleaned_extracted['nationality']
+            logger.info(f"Found nationality in documents: {extracted_identifiers['nationality']}")
         
-        # Get DOB
-        for field in ['date_of_birth', 'dob']:
-            if field in cleaned_extracted and cleaned_extracted[field] != DEFAULT_VALUE:
-                extracted_identifiers['dob'] = cleaned_extracted[field]
-                break
+        # Decide if we can do matching
+        can_match = any(value is not None for value in extracted_identifiers.values())
+        logger.info(f"Can do document matching: {can_match}")
         
-        # Log what identifiers we have for matching
-        logger.info("Document identifiers for matching:")
-        for id_type, value in extracted_identifiers.items():
-            if value:
-                logger.info(f"  - {id_type}: {value}")
-        
-        # If we have few rows (less than 3), distribute document data to all rows
-        # This handles the common case where documents belong to all employees
-        if len(excel_data) <= 2:
-            logger.info(f"Only {len(excel_data)} rows in Excel. Applying document data to all rows.")
-            distribute_to_all = True
+        # Decide strategy for applying document data
+        if len(excel_data) <= 1:
+            # If only one row, apply all document data without matching
+            logger.info("Only one Excel row, applying all document data without matching")
+            apply_strategy = "apply_to_all"
+        elif not can_match:
+            # If no identifying information for matching, apply to all rows
+            logger.info("No identifying information for matching, applying to all rows")
+            apply_strategy = "apply_to_all"
+        elif len(excel_data) <= 3:
+            # For small number of rows, try matching but fall back to all if needed
+            logger.info("Small number of rows, will try matching but fall back to applying to all if no matches")
+            apply_strategy = "try_match_fallback_all"
         else:
-            distribute_to_all = False
+            # For larger datasets, do strict matching
+            logger.info("Larger dataset, will do strict matching")
+            apply_strategy = "strict_match"
         
-        # Create a list to store all processed rows
+        # Process each Excel row
         result_rows = []
-        
-        # Track if we found at least one match
         found_any_match = False
         
-        # Process each Excel row INDIVIDUALLY
         for idx, excel_row in excel_data.iterrows():
-            # Convert row to dictionary and clean
+            # Clean Excel row
             excel_dict = excel_row.to_dict()
             cleaned_excel = self._clean_excel_data(excel_dict)
             
-            # Extract identifiers from this row
+            # Extract identifiers from this row for matching
             row_identifiers = {
                 'name': None,
                 'passport': None,
                 'emirates_id': None,
                 'unified_no': None,
-                'visa_file_number': None,
-                'nationality': None,
-                'dob': None
+                'nationality': None
             }
             
             # Get name from row
@@ -481,36 +506,26 @@ class DataCombiner:
             
             # Get passport from row
             for field in ['Passport No', 'passport_no', 'passport_number']:
-                if field in cleaned_excel and cleaned_excel[field] and cleaned_excel[field] != DEFAULT_VALUE:
+                if field in cleaned_excel and cleaned_excel[field] != DEFAULT_VALUE:
                     row_identifiers['passport'] = str(cleaned_excel[field]).strip()
                     break
             
             # Get Emirates ID from row
             for field in ['Emirates Id', 'emirates_id', 'eid']:
-                if field in cleaned_excel and cleaned_excel[field] and cleaned_excel[field] != DEFAULT_VALUE:
+                if field in cleaned_excel and cleaned_excel[field] != DEFAULT_VALUE:
                     row_identifiers['emirates_id'] = str(cleaned_excel[field]).strip()
                     break
             
             # Get Unified Number from row
             for field in ['Unified No', 'unified_no', 'unified_number']:
-                if field in cleaned_excel and cleaned_excel[field] and cleaned_excel[field] != DEFAULT_VALUE:
+                if field in cleaned_excel and cleaned_excel[field] != DEFAULT_VALUE:
                     row_identifiers['unified_no'] = str(cleaned_excel[field]).strip()
                     break
             
-            # Get Visa File Number from row
-            for field in ['Visa File Number', 'visa_file_number', 'entry_permit_no']:
-                if field in cleaned_excel and cleaned_excel[field] and cleaned_excel[field] != DEFAULT_VALUE:
-                    row_identifiers['visa_file_number'] = str(cleaned_excel[field]).strip()
-                    break
-            
-            # Get Nationality
-            if 'Nationality' in cleaned_excel and cleaned_excel['Nationality'] and cleaned_excel['Nationality'] != DEFAULT_VALUE:
-                row_identifiers['nationality'] = cleaned_excel['Nationality']
-            
-            # Get DOB
-            for field in ['DOB', 'dob', 'date_of_birth']:
-                if field in cleaned_excel and cleaned_excel[field] and cleaned_excel[field] != DEFAULT_VALUE:
-                    row_identifiers['dob'] = cleaned_excel[field]
+            # Get nationality from row
+            for field in ['Nationality', 'nationality']:
+                if field in cleaned_excel and cleaned_excel[field] != DEFAULT_VALUE:
+                    row_identifiers['nationality'] = str(cleaned_excel[field]).strip()
                     break
             
             # Log row identifiers
@@ -519,16 +534,20 @@ class DataCombiner:
                 if value:
                     logger.info(f"  - {id_type}: {value}")
             
-            # Calculate match score
+            # Determine if we should apply document data
+            apply_document_data = False
             match_score = 0
             match_reasons = []
             
-            # If we're distributing to all rows, set a high match score
-            if distribute_to_all:
+            if apply_strategy == "apply_to_all":
+                # Apply to all rows regardless of matching
+                apply_document_data = True
                 match_score = 100
-                match_reasons.append("Distributing to all rows (few rows in Excel)")
+                match_reasons.append("Applying to all rows regardless of matching")
             else:
-                # Check passport match (strongest)
+                # Calculate match score
+                
+                # Check passport match (exact)
                 if extracted_identifiers['passport'] and row_identifiers['passport']:
                     # Clean for comparison
                     doc_passport = re.sub(r'[^A-Z0-9]', '', extracted_identifiers['passport'].upper())
@@ -538,7 +557,7 @@ class DataCombiner:
                         match_score += 100
                         match_reasons.append(f"Passport match: {doc_passport}")
                 
-                # Check Emirates ID match (strong)
+                # Check Emirates ID match (exact)
                 if extracted_identifiers['emirates_id'] and row_identifiers['emirates_id']:
                     # Clean for comparison
                     doc_eid = re.sub(r'[^0-9]', '', str(extracted_identifiers['emirates_id']))
@@ -548,7 +567,7 @@ class DataCombiner:
                         match_score += 100
                         match_reasons.append(f"Emirates ID match: {extracted_identifiers['emirates_id']}")
                 
-                # Check Unified Number match
+                # Check Unified No match (exact)
                 if extracted_identifiers['unified_no'] and row_identifiers['unified_no']:
                     # Clean for comparison
                     doc_uid = re.sub(r'[^0-9]', '', str(extracted_identifiers['unified_no']))
@@ -556,19 +575,9 @@ class DataCombiner:
                     
                     if doc_uid == row_uid:
                         match_score += 100
-                        match_reasons.append(f"Unified Number match: {extracted_identifiers['unified_no']}")
+                        match_reasons.append(f"Unified No match: {extracted_identifiers['unified_no']}")
                 
-                # Check Visa File Number match
-                if extracted_identifiers['visa_file_number'] and row_identifiers['visa_file_number']:
-                    # Clean for comparison
-                    doc_visa = re.sub(r'[^0-9]', '', str(extracted_identifiers['visa_file_number']))
-                    row_visa = re.sub(r'[^0-9]', '', str(row_identifiers['visa_file_number']))
-                    
-                    if doc_visa == row_visa:
-                        match_score += 100
-                        match_reasons.append(f"Visa File Number match: {extracted_identifiers['visa_file_number']}")
-                
-                # Check name similarity (medium strength)
+                # Check name similarity (partial)
                 if extracted_identifiers['name'] and row_identifiers['name']:
                     # Get words from names
                     doc_words = set(extracted_identifiers['name'].lower().split())
@@ -580,98 +589,104 @@ class DataCombiner:
                     if common_words:
                         # Calculate similarity score
                         similarity = len(common_words) / max(len(doc_words), len(row_words))
-                        name_score = int(similarity * 50)  # Up to 50 points for name similarity
+                        name_score = int(similarity * 50)  # Up to 50 points
                         match_score += name_score
                         match_reasons.append(f"Name similarity: {similarity:.2f} (common words: {', '.join(common_words)})")
                 
-                # Check nationality match (weak)
+                # Check nationality match (weak match)
                 if extracted_identifiers['nationality'] and row_identifiers['nationality']:
                     if extracted_identifiers['nationality'].lower() == row_identifiers['nationality'].lower():
                         match_score += 20
                         match_reasons.append(f"Nationality match: {extracted_identifiers['nationality']}")
                 
-                # Check DOB match (medium)
-                if extracted_identifiers['dob'] and row_identifiers['dob']:
-                    # Clean dates for comparison
-                    doc_dob = re.sub(r'[^0-9]', '', str(extracted_identifiers['dob']))
-                    row_dob = re.sub(r'[^0-9]', '', str(row_identifiers['dob']))
-                    
-                    if doc_dob == row_dob:
-                        match_score += 30
-                        match_reasons.append(f"DOB match: {extracted_identifiers['dob']}")
-            
-            # LOWER THRESHOLD: Consider a match if score is 30 or higher (originally 50)
-            apply_document_data = match_score >= 30
+                # Lower threshold for matching - 20 points is enough
+                apply_document_data = match_score >= 20
+                
+                # If using try_match_fallback_all strategy, track if we found any match
+                if apply_document_data and apply_strategy == "try_match_fallback_all":
+                    found_any_match = True
             
             # Log match decision
             if apply_document_data:
                 logger.info(f"Row {idx} MATCHES document data (score: {match_score}):")
                 for reason in match_reasons:
                     logger.info(f"  - {reason}")
-                found_any_match = True
             else:
                 logger.info(f"Row {idx} does NOT match document data (score: {match_score})")
             
-            # FALLBACK: If we didn't find ANY matches across all rows, use the document data for all rows
-            # This will be applied at the end
-            
-            # Combine data - DEEP COPY to avoid shared references
-            row_combined = copy.deepcopy(self._combine_row_data(
-                cleaned_extracted if apply_document_data else {}, 
-                cleaned_excel, 
-                document_paths if apply_document_data else None
-            ))
+            # Create DEEP COPY of data for this row to prevent reference sharing
+            # CRITICAL: Each row must have its own copy of the data
+            if apply_document_data:
+                # Combine row with document data
+                row_data = copy.deepcopy(self._combine_row_data(
+                    cleaned_extracted, 
+                    cleaned_excel,
+                    document_paths
+                ))
+            else:
+                # Just use the Excel data
+                row_data = copy.deepcopy(cleaned_excel)
             
             # Map to template
-            row_mapped = self._map_to_template(row_combined, template_columns, field_mappings)
+            mapped_row = self._map_to_template(row_data, template_columns, field_mappings)
             
-            # Ensure standard fields are set for all rows
-            self._apply_standard_fields(row_mapped)
+            # Ensure standard fields are set
+            self._apply_standard_fields(mapped_row)
             
-            # Process Emirates ID if present
-            if 'Emirates Id' in row_mapped and row_mapped['Emirates Id'] != DEFAULT_VALUE:
-                row_mapped['Emirates Id'] = self._format_emirates_id(row_mapped['Emirates Id'])
+            # Format Emirates ID if present
+            if 'Emirates Id' in mapped_row and mapped_row['Emirates Id'] != DEFAULT_VALUE:
+                mapped_row['Emirates Id'] = self._format_emirates_id(mapped_row['Emirates Id'])
             
             # Add row to results
-            result_rows.append(row_mapped)
+            result_rows.append(mapped_row)
         
-        # FALLBACK: If no matches were found for any row, apply document data to all rows
-        if not found_any_match and not distribute_to_all and len(excel_data) > 0 and cleaned_extracted:
-            logger.warning("NO MATCHES FOUND FOR ANY ROW. Applying document data to all rows as fallback.")
+        # Handle fallback strategy
+        if apply_strategy == "try_match_fallback_all" and not found_any_match and len(excel_data) > 0:
+            logger.warning("No matching rows found with try_match_fallback_all strategy. Applying document data to all rows.")
             
-            # Re-process all rows with document data
-            updated_rows = []
-            for row_data in result_rows:
-                # Make a fresh deep copy of the document data
-                doc_data_copy = copy.deepcopy(cleaned_extracted)
+            # Clear result_rows and reprocess all rows with document data
+            result_rows = []
+            
+            for idx, excel_row in excel_data.iterrows():
+                excel_dict = excel_row.to_dict()
+                cleaned_excel = self._clean_excel_data(excel_dict)
                 
-                # Combine with the row data
-                combined = copy.deepcopy(self._combine_row_data(
-                    doc_data_copy,
-                    row_data,
+                # Combine with document data
+                row_data = copy.deepcopy(self._combine_row_data(
+                    cleaned_extracted, 
+                    cleaned_excel,
                     document_paths
                 ))
                 
-                # Re-map to template
-                mapped = self._map_to_template(combined, template_columns, field_mappings)
+                # Map to template
+                mapped_row = self._map_to_template(row_data, template_columns, field_mappings)
                 
-                # Ensure standard fields
-                self._apply_standard_fields(mapped)
+                # Ensure standard fields are set
+                self._apply_standard_fields(mapped_row)
                 
-                # Process Emirates ID if present
-                if 'Emirates Id' in mapped and mapped['Emirates Id'] != DEFAULT_VALUE:
-                    mapped['Emirates Id'] = self._format_emirates_id(mapped['Emirates Id'])
+                # Format Emirates ID if present
+                if 'Emirates Id' in mapped_row and mapped_row['Emirates Id'] != DEFAULT_VALUE:
+                    mapped_row['Emirates Id'] = self._format_emirates_id(mapped_row['Emirates Id'])
                 
-                updated_rows.append(mapped)
-            
-            # Replace result_rows with updated_rows
-            result_rows = updated_rows
+                # Add row to results
+                result_rows.append(mapped_row)
         
         # Create DataFrame from rows
         result_df = pd.DataFrame(result_rows)
         
-        # Apply final formatting
-        result_df = self._format_fields_for_output(result_df)
+        # Apply final formatting for output
+        for col in result_df.columns:
+            col_lower = col.lower()
+            # Only Middle Name gets '.' default
+            if col_lower == 'middle name' or col == 'Middle Name':
+                result_df[col] = result_df[col].apply(
+                    lambda x: '.' if pd.isna(x) or x == '' or x == DEFAULT_VALUE else x
+                )
+            else:
+                # All other fields get empty string
+                result_df[col] = result_df[col].apply(
+                    lambda x: '' if pd.isna(x) or x == '' or x == DEFAULT_VALUE else x
+                )
         
         return result_df
 

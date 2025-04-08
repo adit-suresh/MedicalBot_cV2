@@ -777,6 +777,88 @@ class WorkflowTester:
                                 all_excel_rows.append(row_dict)
                             
                             logger.info(f"Processed {len(df)} rows from Excel file")
+                            
+                            # Debug code to check document extraction and conversion
+                            logger.info("=" * 80)
+                            logger.info("DOCUMENT PROCESSING DIAGNOSTICS")
+                            logger.info("=" * 80)
+
+                            # Check which documents were found and converted
+                            logger.info(f"Documents found: {len(document_paths)}")
+                            for doc_type, doc_path in document_paths.items():
+                                logger.info(f"Document: {doc_type} - {os.path.basename(doc_path)}")
+                                
+                                # Check if it was converted from PDF to JPG
+                                converted_dir = os.path.join(os.path.dirname(doc_path), "converted")
+                                if os.path.exists(converted_dir):
+                                    converted_files = [f for f in os.listdir(converted_dir) if f.endswith(".jpg")]
+                                    logger.info(f"  - Converted to {len(converted_files)} JPG files in {converted_dir}")
+                                else:
+                                    logger.info(f"  - No conversion directory found")
+
+                            # Log extracted data from documents
+                            logger.info("Extracted data from documents:")
+                            if doc_data_by_type:
+                                for doc_type, doc_data in doc_data_by_type.items():
+                                    logger.info(f"Data from {doc_type}:")
+                                    for key, value in doc_data.items():
+                                        if value != self.DEFAULT_VALUE:
+                                            logger.info(f"  - {key}: {value}")
+                            else:
+                                logger.error("NO DOCUMENT DATA EXTRACTED! This will cause empty fields in final output.")
+                                
+                            # Check if we're using GPT or Textract
+                            logger.info(f"OCR processors: GPT available: {self.gpt is not None}, Textract available: {self.textract is not None}")
+
+                            # Add this fix to ensure document data is properly processed
+                            # If no document data was extracted and documents exist, force processing with Textract
+                            if not doc_data_by_type and document_paths:
+                                logger.warning("No document data extracted but documents exist. Forcing extraction with Textract...")
+                                
+                                # Force processing with Textract
+                                for doc_type, file_path in document_paths.items():
+                                    try:
+                                        logger.info(f"Force processing {doc_type} with Textract: {file_path}")
+                                        textract_data = self.textract.process_document(file_path, doc_type)
+                                        doc_data_by_type[doc_type] = textract_data
+                                        
+                                        # Update the combined extracted data
+                                        for key, value in textract_data.items():
+                                            if key not in extracted_data or (value != self.DEFAULT_VALUE and extracted_data[key] == self.DEFAULT_VALUE):
+                                                extracted_data[key] = value
+                                        
+                                        logger.info(f"Forced extraction from {doc_type}: {list(textract_data.keys())}")
+                                    except Exception as e:
+                                        logger.error(f"Error in forced processing of {doc_type} document: {str(e)}", exc_info=True)
+                                
+                                # Log the updated extracted data
+                                if doc_data_by_type:
+                                    logger.info("Updated document data after forced extraction:")
+                                    for doc_type, doc_data in doc_data_by_type.items():
+                                        logger.info(f"Data from {doc_type}:")
+                                        for key, value in doc_data.items():
+                                            if value != self.DEFAULT_VALUE:
+                                                logger.info(f"  - {key}: {value}")
+                                else:
+                                    logger.error("STILL NO DOCUMENT DATA AFTER FORCED EXTRACTION!")
+
+                            # Also check Excel data
+                            logger.info("Excel data diagnostics:")
+                            logger.info(f"Excel files found: {len(excel_files)}")
+                            for excel_file in excel_files:
+                                logger.info(f"Excel file: {os.path.basename(excel_file)}")
+                                try:
+                                    df = pd.read_excel(excel_file)
+                                    logger.info(f"  - Rows: {len(df)}")
+                                    logger.info(f"  - Columns: {list(df.columns)[:10]}...")
+                                except Exception as e:
+                                    logger.error(f"  - Error reading Excel: {str(e)}")
+
+                            # Check what's being passed to the data combiner
+                            logger.info("Data being passed to the combiner:")
+                            logger.info(f"Extracted data keys: {list(extracted_data.keys())}")
+                            logger.info(f"Excel rows: {len(all_excel_rows)}")
+                            logger.info(f"Document paths: {document_paths}")
                         
                         if errors:
                             logger.warning(f"Excel validation errors: {errors}")
@@ -840,40 +922,78 @@ class WorkflowTester:
                         f"Local file location: {zip_path}\n"
                     )
                     
-                    # Send email with attachment
-                    email_sent = self.email_sender.send_email(
-                        subject=f"Medical Bot: {subject} - Submission Complete",
-                        body=email_body,
-                        attachment_path=zip_path
-                    )
+                    logger.info("Attempting to send email with submission results")
+    
+                    # Prepare email content
+                    email_subject = f"Medical Bot: {subject} - Submission Complete"
+                    email_body = f"""
+                    Dear Team,
                     
-                    if email_sent:
-                        logger.info(f"Email sent with submission ZIP: {zip_path}")
-                        logger.info(f"Files are also available locally at: {zip_path}")
-                        print(f"\n✅ SUBMISSION COMPLETE!\nProcessed files are available at:\n{zip_path}\n")
-                    else:
-                        logger.error("Failed to send email with submission")
-                        logger.info(f"Files are available locally at: {zip_path}")
-                        print(f"\n⚠️ Email sending failed, but files are available at:\n{zip_path}\n")
+                    The Medical Bot has completed processing a submission.
+                    
+                    Details:
+                    - Subject: {subject}
+                    - Files Processed: {len(saved_files)}
+                    - Documents: {list(document_paths.keys())}
+                    - Excel Files: {[os.path.basename(f) for f in excel_files]}
+                    - Rows Processed: {len(all_excel_rows) if all_excel_rows else 0}
+                    
+                    The processed files are attached as a ZIP archive.
+                    They are also available locally at: {submission_dir}
+                    
+                    Regards,
+                    Medical Bot
+                    """
+                    
+                    # Create ZIP file with all processed files
+                    zip_path = None
+                    try:
+                        zip_path = self._create_zip(submission_dir)
+                        logger.info(f"Created ZIP file for email attachment: {zip_path}")
+                    except Exception as e:
+                        logger.error(f"Error creating ZIP file for email: {str(e)}", exc_info=True)
+                    
+                    # Try to send email
+                    try:
+                        # Import inside the function to avoid circular dependencies
+                        from src.utils.email_sender import EmailSender
                         
-                        # Try sending without attachment as fallback
-                        logger.warning("Trying to send email without attachment")
-                        fallback_body = (
-                            f"New submission processed: {subject}\n\n"
-                            f"The attachment was too large to send via email.\n"
-                            f"Files are available locally at: {zip_path}\n"
-                        )
+                        # Create a fresh EmailSender instance
+                        email_sender = EmailSender()
                         
-                        fallback_sent = self.email_sender.send_email(
-                            subject=f"Medical Bot: {subject} - Submission Complete (No Attachment)",
-                            body=fallback_body
-                        )
+                        # Log email configuration without accessing attributes directly
+                        logger.info("Email sender configuration:")
                         
-                        if fallback_sent:
-                            logger.info("Successfully sent email without attachment")
-                            
+                        # Safely check if attributes exist
+                        for attr in ['smtp_server', 'smtp_port', 'from_email', 'to_email']:
+                            if hasattr(email_sender, attr):
+                                logger.info(f"  - {attr}: {getattr(email_sender, attr)}")
+                        
+                        # Send email with attachment if available
+                        email_sent = False
+                        if zip_path and os.path.exists(zip_path):
+                            logger.info(f"Sending email with ZIP attachment: {os.path.basename(zip_path)}")
+                            email_sent = email_sender.send_email(
+                                subject=email_subject,
+                                body=email_body,
+                                attachment_path=zip_path
+                            )
+                        else:
+                            # Send without attachment
+                            logger.info("Sending email without attachment (ZIP creation failed)")
+                            email_sent = email_sender.send_email(
+                                subject=email_subject,
+                                body=email_body
+                            )
+                        
+                        if email_sent:
+                            logger.info("Email sent successfully")
+                        else:
+                            logger.warning("Email sending returned False")
+                    except Exception as e:
+                        logger.error(f"Error sending email: {str(e)}", exc_info=True)
                 except Exception as e:
-                    logger.error(f"Error creating or sending submission: {str(e)}", exc_info=True)      
+                    logger.error(f"Error in email preparation: {str(e)}", exc_info=True)      
             except Exception as e:
                 logger.error(f"Error saving submission: {str(e)}", exc_info=True)
                 # Continue without failing the whole process
@@ -1554,7 +1674,7 @@ class WorkflowTester:
                         break
                 
                 # Map Emirates ID
-                for client_field in ['EIDNumber', 'Emirates ID', 'EmiratesID', 'EID']:
+                for client_field in ['EIDNumber', 'Emirates ID', 'EmiratesID', 'EID', "Emirates Id"]:
                     if client_field in client_df.columns and pd.notna(row[client_field]):
                         eid = str(row[client_field]).strip()
                         # Format Emirates ID if needed
@@ -1562,10 +1682,28 @@ class WorkflowTester:
                             digits = eid.replace(' ', '')
                             eid = f"{digits[:3]}-{digits[3:7]}-{digits[7:14]}-{digits[14]}"
                         
-                        if is_nas:
+                        if is_nas or is_almadallah:
                             template_row['Emirates Id'] = eid
-                        elif is_almadallah:
-                            template_row['Emirates Id'] = eid
+                        # Format Emirates ID - Replace any that don't start with '784'
+                        if is_nas and 'Emirates Id' in template_row and template_row['Emirates Id']:
+                            eid_value = template_row['Emirates Id']
+                            # Remove any non-digits or hyphens to check the start
+                            clean_eid = ''.join(filter(lambda c: c.isdigit() or c == '-', eid_value))
+                            
+                            # Check if it starts with 784 (either with or without hyphens)
+                            if not (clean_eid.startswith('784') or clean_eid.startswith('784-')):
+                                logger.warning(f"Emirates ID {eid_value} doesn't start with 784, replacing with default")
+                                template_row['Emirates Id'] = '111-1111-1111111-1'
+                        elif is_almadallah and 'Emirates Id' in template_row and template_row['Emirates Id']:
+                            eid_value = template_row['Emirates Id']
+                            # Remove any non-digits or hyphens to check the start
+                            clean_eid = ''.join(filter(lambda c: c.isdigit() or c == '-', eid_value))
+                            
+                            # Check if it starts with 784 (either with or without hyphens)
+                            if not (clean_eid.startswith('784') or clean_eid.startswith('784-')):
+                                logger.warning(f"Emirates ID {eid_value} doesn't start with 784, replacing with default")
+                                template_row['Emirates Id'] = '111-1111-1111111-1'
+
                         break
                 
                 # Map Passport Number
@@ -1581,13 +1719,13 @@ class WorkflowTester:
                         break
                 
                 # Map Visa File Number
-                for client_field in ['ResisdentFileNumber', 'ResidentFileNumber', 'VisaFileNumber', 'Visa File No']:
+                for client_field in ['ResisdentFileNumber', 'ResidentFileNumber', 'VisaFileNumber', 'Visa File No', 'Visa File Number']:
                     if client_field in client_df.columns and pd.notna(row[client_field]):
                         template_row['Visa File Number'] = str(row[client_field]).strip()
                         break
                 
                 # Map Mobile Number
-                for client_field in ['EntityContactNumber', 'Mobile', 'MobileNo', 'Phone', 'Contact']:
+                for client_field in ['EntityContactNumber', 'Mobile', 'Mobile No', 'Phone', 'Contact', 'ContactNo', 'Contact Number']:
                     if client_field in client_df.columns and pd.notna(row[client_field]):
                         mobile = str(row[client_field]).strip()
                         if is_nas:
@@ -1599,17 +1737,23 @@ class WorkflowTester:
                             template_row['LANDLINENO'] = mobile
                         break
                 
-                # Map Email
-                for client_field in ['EmailID', 'Email', 'EmailAddress', 'EMAIL', 'Mail', 'email', 'Email Address', 'E-mail']:
+                # Map Email - added more variations and debug logging
+                email_found = False
+                for client_field in ['EmailID', 'Email', 'EmailAddress', 'EMAIL', 'Mail', 'email', 'Email Address', 'E-mail', 'Email ID', 'mail']:
                     if client_field in client_df.columns and pd.notna(row[client_field]):
                         email = str(row[client_field]).strip()
+                        logger.info(f"Found email '{email}' in column '{client_field}' for row {idx}")
                         if is_nas:
                             template_row['Email'] = email
                             template_row['Company Mail'] = email
                         elif is_almadallah:
                             template_row['EMAIL'] = email
                             template_row['COMPANYEMAILID'] = email
+                        email_found = True
                         break
+                        
+                if not email_found:
+                    logger.warning(f"No email found for row {idx}. Available columns: {list(client_df.columns)}")
                 
                 # Map Gender
                 for client_field in ['Gender', 'Sex']:
@@ -1647,14 +1791,28 @@ class WorkflowTester:
                         break
                 
                 # Map Marital Status
-                for client_field in ['MaritalStatus', 'Marital', 'MarriageStatus']:
+                for client_field in ['MaritalStatus', 'Marital', 'MarriageStatus', 'Marital Status']:
                     if client_field in client_df.columns and pd.notna(row[client_field]):
                         if is_nas:
                             template_row['Marital Status'] = str(row[client_field]).strip()
                         break
                 
+                # Map Category
+                for client_field in ['Category', 'EmpCategory', 'EmployeeCategory', 'EmpType', 'Type']:
+                    if client_field in client_df.columns and pd.notna(row[client_field]):
+                        if is_nas:
+                            template_row['Category'] = str(row[client_field]).strip()
+                        break
+                
+                # Map Relation
+                for client_field in ['Relation', 'Relationship', 'RelationshipToSponsor']:
+                    if client_field in client_df.columns and pd.notna(row[client_field]):
+                        if is_nas:
+                            template_row['Relation'] = str(row[client_field]).strip()
+                        break
+                
                 # Map DOB or Date of Birth
-                for client_field in ['DOB', 'DateOfBirth', 'BirthDate']:
+                for client_field in ['DOB', 'DateOfBirth', 'BirthDate', 'Date of Birth']:
                     if client_field in client_df.columns and pd.notna(row[client_field]):
                         try:
                             dob = row[client_field]
@@ -1670,20 +1828,13 @@ class WorkflowTester:
                         break
                 
                 # Map Salary for Salary Band
-                for client_field in ['Salary', 'SalaryAmount', 'MonthlySalary']:
+                for client_field in ['Salary', 'SalaryAmount', 'MonthlySalary', 'BasicSalary']:
                     if client_field in client_df.columns and pd.notna(row[client_field]):
-                        try:
-                            salary = float(row[client_field])
-                            if salary <= 4000:
-                                template_row['Salary Band'] = 'Below 4000'
-                            else:
-                                template_row['Salary Band'] = 'Above 4000'
-                        except:
-                            template_row['Salary Band'] = 'Above 4000'  # Default if conversion fails
+                        if is_nas:
+                            template_row['Salary Band'] = str(row[client_field]).strip()
+                        elif is_almadallah:
+                            template_row['Salary Band'] = str(row[client_field]).strip()
                         break
-                else:
-                    # Default salary band if no salary field found
-                    template_row['Salary Band'] = 'Above 4000'
                 
                 # SPECIAL HANDLING FOR NAME FIELDS
                 # Try different name field variations
@@ -1694,6 +1845,7 @@ class WorkflowTester:
                 middle_name = "."
                 last_name = ""
                 
+                # Look for explicit first, middle, last name fields
                 for fn_field in ['FirstName', 'First Name', 'FName', 'GivenName']:
                     if fn_field in client_df.columns and pd.notna(row[fn_field]):
                         first_name = str(row[fn_field]).strip()
@@ -1714,9 +1866,12 @@ class WorkflowTester:
                 
                 # Check for full name field if individual components weren't found
                 if not name_found or not first_name:
-                    for name_field in ['Name', 'FullName', 'Full Name', 'EmployeeName', 'FirstName']:  # Added FirstName
+                    for name_field in ['Name', 'FullName', 'Full Name', 'EmployeeName', 'FirstName', 'First Name']:
                         if name_field in client_df.columns and pd.notna(row[name_field]):
                             full_name = str(row[name_field]).strip()
+                            logger.info(f"Processing name from '{name_field}' column: '{full_name}'")
+                            
+                            # Force name splitting even if FirstName column exists
                             name_parts = full_name.split()
                             
                             if len(name_parts) >= 3:
@@ -1724,19 +1879,50 @@ class WorkflowTester:
                                 first_name = name_parts[0]
                                 middle_name = name_parts[1]
                                 last_name = ' '.join(name_parts[2:])
+                                logger.info(f"  Split into First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
                             elif len(name_parts) == 2:
                                 # If 2 words: first = first, middle = ".", last = second
                                 first_name = name_parts[0]
                                 middle_name = "."
                                 last_name = name_parts[1]
+                                logger.info(f"  Split into First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
                             elif len(name_parts) == 1:
                                 # If 1 word: first = that word, middle = ".", last = ""
                                 first_name = name_parts[0]
                                 middle_name = "."
                                 last_name = ""
+                                logger.info(f"  Split into First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
                             
                             name_found = True
-                            break
+                            break  # This breaks out of the name field searching, but stays in the row processing loop
+
+                # CRITICAL FIX - REMOVED THE INCORRECT BREAK HERE
+                # No need to exit the main processing loop after name splitting!
+
+                # ALWAYS force name splitting on the FirstName column if it contains multiple words
+                # This handles the 400+ client Excel case where FirstName has full names
+                if 'FirstName' in client_df.columns and pd.notna(row['FirstName']):
+                    full_name = str(row['FirstName']).strip()
+                    name_parts = full_name.split()
+                    
+                    if len(name_parts) >= 2:  # If FirstName has 2+ words, split it
+                        logger.info(f"Forcing name split on FirstName '{full_name}' for row {idx}")
+                        first_name = name_parts[0]
+                        
+                        if len(name_parts) >= 3:
+                            # First word as first name, second as middle, third+ as last
+                            middle_name = name_parts[1]
+                            last_name = ' '.join(name_parts[2:])
+                        else:  # Exactly 2 words
+                            # First word as first name, '.' as middle, second as last
+                            middle_name = "."
+                            last_name = name_parts[1]
+                            
+                        logger.info(f"  → Split into First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
+                        name_found = True
+                
+                # Log name field status
+                logger.info(f"Final name components for row {idx}: First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
                 
                 # Apply the name fields to the template
                 if is_nas:
@@ -1755,13 +1941,14 @@ class WorkflowTester:
                 if is_nas:
                     # Default fields if not set above
                     if not template_row.get('Contract Name'):
-                        template_row['Contract Name'] = "Farnek Services LLC"
+                        template_row['Contract Name'] = ""
                     
+                    # Only set defaults for Category and Relation if not already set
                     if not template_row.get('Category'):
-                        template_row['Category'] = "Self"
+                        template_row['Category'] = ""
                     
                     if not template_row.get('Relation'):
-                        template_row['Relation'] = "Self"
+                        template_row['Relation'] = ""
                     
                     # Copy Staff ID to Family No. if not already set
                     if template_row.get('Staff ID') and not template_row.get('Family No.'):
@@ -1817,14 +2004,14 @@ class WorkflowTester:
                     digits = ''.join(filter(str.isdigit, str(visa_file)))
                     
                     if digits.startswith('10'):  # Abu Dhabi
-                        if is_nas:
+                        if is_almadallah:
                             template_row['Work Emirate'] = 'Abu Dhabi'
                             template_row['Residence Emirate'] = 'Abu Dhabi'
                             template_row['Work Region'] = 'Abu Dhabi - Abu Dhabi'
                             template_row['Residence Region'] = 'Abu Dhabi - Abu Dhabi'
                             template_row['Visa Issuance Emirate'] = 'Abu Dhabi'
                             template_row['Member Type'] = 'Expat whose residence issued other than Dubai'
-                        elif is_almadallah:
+                        elif is_nas:
                             template_row['Work Emirate'] = 'Abu Dhabi'
                             template_row['Residence Emirate'] = 'Abu Dhabi'
                             template_row['Work Region'] = 'Al Ain City'
@@ -1832,18 +2019,27 @@ class WorkflowTester:
                             template_row['Visa Issuance Emirate'] = 'Abu Dhabi'
                             template_row['Member Type'] = 'Expat whose residence issued other than Dubai'
                     elif digits.startswith('20'):  # Dubai
-                        if is_nas:
+                        if is_almadallah:
                             template_row['Work Emirate'] = 'Dubai'
                             template_row['Residence Emirate'] = 'Dubai'
                             template_row['Work Region'] = 'Dubai - Abu Hail'
                             template_row['Residence Region'] = 'Dubai - Abu Hail'
                             template_row['Visa Issuance Emirate'] = 'Dubai'
                             template_row['Member Type'] = 'Expat whose residence issued in Dubai'
-                        elif is_almadallah:
+                        elif is_nas:
                             template_row['Work Emirate'] = 'Dubai'
                             template_row['Residence Emirate'] = 'Dubai'
                             template_row['Work Region'] = 'DUBAI (DISTRICT UNKNOWN)'
                             template_row['Residence Region'] = 'DUBAI (DISTRICT UNKNOWN)'
+                            template_row['Visa Issuance Emirate'] = 'Dubai'
+                            template_row['Member Type'] = 'Expat whose residence issued in Dubai'
+                    else:
+                        # Default to Dubai for any other visa number pattern
+                        if is_nas:
+                            template_row['Work Emirate'] = 'Dubai'
+                            template_row['Residence Emirate'] = 'Dubai'
+                            template_row['Work Region'] = 'Dubai - Abu Hail'
+                            template_row['Residence Region'] = 'Dubai - Abu Hail'
                             template_row['Visa Issuance Emirate'] = 'Dubai'
                             template_row['Member Type'] = 'Expat whose residence issued in Dubai'
                 else:
@@ -1895,6 +2091,52 @@ class WorkflowTester:
             result_df.to_excel(output_path, index=False)
             
             logger.info(f"Successfully processed large client Excel with {len(result_df)} rows")
+            
+            # Try to send email with the processed file
+            try:
+                email_subject = "Medical Bot - Large Client Excel Processing Complete"
+                email_body = f"""
+                Dear Team,
+                
+                The medical bot has completed processing a large client Excel file.
+                
+                File: {os.path.basename(excel_path)}
+                Output: {os.path.basename(output_path)}
+                Rows Processed: {len(result_df)}
+                
+                Please find the processed file attached.
+                
+                Regards,
+                Medical Bot
+                """
+                
+                # Try to send email with attachment
+                logger.info(f"Attempting to send email with attachment: {output_path}")
+                from src.utils.email_sender import EmailSender
+                email_sender = EmailSender()
+                
+                # Log email configuration without accessing attributes directly
+                logger.info("Email sender configuration:")
+                
+                # Safely check if attributes exist
+                for attr in ['smtp_server', 'smtp_port', 'from_email', 'to_email']:
+                    if hasattr(email_sender, attr):
+                        logger.info(f"  - {attr}: {getattr(email_sender, attr)}")
+                
+                email_sent = email_sender.send_email(
+                    subject=email_subject,
+                    body=email_body,
+                    attachment_path=output_path
+                )
+                
+                if email_sent:
+                    logger.info("Email sent successfully with processed Excel file")
+                else:
+                    logger.warning("Failed to send email with processed Excel file")
+            except Exception as e:
+                logger.error(f"Error sending email: {str(e)}", exc_info=True)
+                # Continue processing even if email fails
+            
             return {
                 "status": "success",
                 "rows_processed": len(result_df),

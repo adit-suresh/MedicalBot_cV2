@@ -62,10 +62,11 @@ class GPTProcessor:
                 from pdf2image import convert_from_path
                 
                 # Create a temporary directory for the converted image
-                temp_dir = tempfile.mkdtemp()
+                converted_dir = os.path.join(os.path.dirname(file_path), "converted")
+                os.makedirs(converted_dir, exist_ok=True)
                 
                 # Generate output path
-                output_path = os.path.join(temp_dir, "converted_page.jpg")
+                output_path = os.path.join(converted_dir, f"{os.path.basename(file_path)}.jpg")
                 
                 # Convert first page of PDF to image
                 images = convert_from_path(file_path, first_page=1, last_page=1, dpi=300)
@@ -76,16 +77,30 @@ class GPTProcessor:
                     logger.info(f"PDF successfully converted to image: {output_path}")
                     return output_path, True  # Return path and flag as temporary
                 
-                logger.warning(f"Failed to convert PDF to image, no pages extracted")
-                return file_path, False
+                logger.error(f"Failed to convert PDF to image, no pages extracted")
+                # Instead of proceeding with original file (which will fail), raise error
+                raise ValueError("PDF conversion failed - no pages extracted")
                 
             except Exception as e:
-                logger.warning(f"Error converting PDF to image: {str(e)}")
-                logger.warning("Proceeding with original file, may cause API errors")
-                return file_path, False
+                logger.error(f"Error converting PDF to image: {str(e)}")
+                # Instead of proceeding with original, create explicit error
+                raise ValueError(f"PDF conversion failed: {str(e)}")
         
-        # For image files, return as is
-        return file_path, False
+        # For image files, check if they're valid
+        elif file_ext in ['.jpg', '.jpeg', '.png']:
+            try:
+                # Try to open with PIL to verify it's a valid image
+                img = Image.open(file_path)
+                img.verify()  # Verify it's a valid image
+                return file_path, False
+            except Exception as e:
+                logger.error(f"Invalid image file {file_path}: {str(e)}")
+                raise ValueError(f"Invalid image file: {str(e)}")
+        
+        # For other file types, raise error to prevent processing failure
+        else:
+            logger.error(f"Unsupported file type: {file_ext}. Only PDF, JPG, JPEG, PNG supported.")
+            raise ValueError(f"Unsupported file type: {file_ext}. Only PDF, JPG, JPEG, PNG supported.")
     
     def _encode_image(self, image_path: str) -> str:
         """
