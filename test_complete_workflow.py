@@ -377,9 +377,23 @@ class WorkflowTester:
                     # Check if this is a large client Excel file
                     try:
                         df = pd.read_excel(excel_path)
-                        # If it has specific columns we expect in the large client format
-                        if set(['StaffNo', 'FirstName', 'Country', 'EIDNumber']).issubset(df.columns) and len(df) > 100:
+                        logger.info(f"Examining Excel file with {len(df)} rows and {len(df.columns)} columns")
+                        
+                        # Log column names for debugging
+                        logger.info(f"Excel columns: {list(df.columns)}")
+                        
+                        # Check for specific columns or large number of rows
+                        client_excel_indicators = ['StaffNo', 'FirstName', 'Country', 'EIDNumber']
+                        
+                        # Check if any of the indicator columns exist (flexible matching)
+                        columns_found = [col for col in client_excel_indicators if any(col.lower() in c.lower() for c in df.columns)]
+                        
+                        # Consider it a large client Excel if it has several matching columns or just a lot of rows
+                        is_large_client = (len(columns_found) >= 2 and len(df) > 10) or len(df) > 100
+                        
+                        if is_large_client:
                             logger.info(f"Detected large client Excel file with {len(df)} rows")
+                            logger.info(f"Matching columns found: {columns_found}")
                             
                             # Process as large client Excel
                             output_path = os.path.join(
@@ -388,10 +402,22 @@ class WorkflowTester:
                             )
                             
                             template_path = self._select_template_for_company(subject)
+                            logger.info(f"Selected template: {template_path}")
+                            
+                            # Make sure to use self. to call it as a method
                             result = self._process_large_client_excel(excel_path, template_path, output_path)
                             
                             if result['status'] == 'success':
                                 logger.info(f"Successfully processed large client Excel: {result['rows_processed']} rows")
+                                
+                                # Create a zip file for easy download
+                                try:
+                                    zip_path = self._create_zip(submission_dir)
+                                    logger.info(f"Created ZIP file: {zip_path}")
+                                except Exception as e:
+                                    logger.error(f"Error creating ZIP file: {str(e)}")
+                                    zip_path = None
+                                
                                 # Skip the rest of the document processing, use the processed output directly
                                 return {
                                     "status": "success",
@@ -400,13 +426,15 @@ class WorkflowTester:
                                     "documents": {},
                                     "excel_files": [excel_path],
                                     "documents_processed": [],
-                                    "rows_processed": result['rows_processed']
+                                    "rows_processed": result['rows_processed'],
+                                    "output_path": output_path,
+                                    "zip_path": zip_path
                                 }
                             else:
                                 logger.error(f"Failed to process large client Excel: {result.get('error', 'Unknown error')}")
                                 # Continue with normal processing
                         else:
-                            logger.info("Not a large client Excel file or too few rows, processing normally")
+                            logger.info("Not a large client Excel file, processing normally")
                     except Exception as e:
                         logger.warning(f"Error checking for large client Excel: {str(e)}")
                         # Continue with normal processing
@@ -540,6 +568,14 @@ class WorkflowTester:
                         # Fallback to Textract
                         doc_data = self.textract.process_document(file_path, doc_type)
                         doc_data_by_type[doc_type] = doc_data
+                        
+                        # Added debug logs
+                        logger.info("===== EXTRACTED DOCUMENT DATA =====")
+                        for doc_type, doc_data in doc_data_by_type.items():
+                            logger.info(f"Document type: {doc_type}")
+                            for key, value in doc_data.items():
+                                if value != self.DEFAULT_VALUE:
+                                    logger.info(f"  - {key}: {value}")
                         
                     except Exception as e:
                         logger.error(f"Error processing {doc_type} document: {str(e)}")
@@ -1466,242 +1502,394 @@ class WorkflowTester:
             logger.info(f"Processing large client Excel: {excel_path}")
             
             # Read the client Excel file
-            df = pd.read_excel(excel_path)
-            logger.info(f"Read {len(df)} rows from client Excel")
+            client_df = pd.read_excel(excel_path)
+            logger.info(f"Read {len(client_df)} rows from client Excel")
             
             # Read the template to understand required columns
             template_df = pd.read_excel(template_path)
             template_columns = template_df.columns.tolist()
             logger.info(f"Template has {len(template_columns)} columns")
             
-            # Create a new DataFrame for the template format
-            result_df = pd.DataFrame(columns=template_columns)
-            
             # Determine which template we're using
             template_name = os.path.basename(template_path).lower()
             is_nas = 'nas' in template_name
-            is_almadallah = 'madallah' in template_name
+            is_almadallah = 'madallah' in template_name or 'almadallah' in template_name
             
             logger.info(f"Using {'NAS' if is_nas else 'Al Madallah' if is_almadallah else 'Unknown'} template")
             
-            # Process each row with custom field mapping
-            for idx, row in df.iterrows():
-                # Create a new row for the template
+            # Create a new DataFrame with template columns
+            result_df = pd.DataFrame(columns=template_columns)
+            
+            # Log client Excel columns and some sample values for debugging
+            logger.info("Client Excel columns:")
+            for col in client_df.columns:
+                sample_values = client_df[col].dropna().head(2).tolist()
+                sample_str = str(sample_values)[:50] + "..." if len(str(sample_values)) > 50 else sample_values
+                logger.info(f"  - {col}: {sample_str}")
+            
+            # Process each row in the client Excel
+            for idx, row in client_df.iterrows():
+                # Create a dictionary for this row with template column names
                 template_row = {}
-                
-                # Fill in with default values first
                 for col in template_columns:
-                    template_row[col] = ""  # Empty string as default
+                    template_row[col] = ""  # Initialize with empty strings
                 
-                # NAS Template specific mappings
-                if is_nas:
-                    # Common field mapping for NAS template
-                    field_mapping = {
-                        'StaffNo': 'Staff ID',
-                        'FirstName': None,  # Special handling below
-                        'Country': 'Nationality',
-                        'MaritalStatus': 'Marital Status',
-                        'EIDNumber': 'Emirates Id',
-                        'Salary': None,  # Special handling below
-                        'EmailID': 'Email',
-                        'PassportNum': 'Passport No',
-                        'UIDNo': 'Unified No',
-                        'ResisdentFileNumber': 'Visa File Number',
-                        'EntityContactNumber': 'Mobile No',
-                        'Department': 'Department',
-                        'Gender': 'Gender',
-                        'PassportExpDate': 'Passport Expiry Date',
-                        'VisaExpDate': 'Visa Expiry Date'
-                    }
-                    
-                    # Apply direct mappings
-                    for client_field, nas_field in field_mapping.items():
-                        if client_field in row and pd.notna(row[client_field]) and nas_field:
-                            template_row[nas_field] = str(row[client_field]).strip()
-                    
-                    # Handle name fields with special logic
-                    if 'FirstName' in row and pd.notna(row['FirstName']):
-                        full_name = str(row['FirstName']).strip()
-                        name_parts = full_name.split()
+                # UNIVERSAL FIELD MAPPING - works for any client Excel format
+                # Try multiple variations of column names
+                
+                # Map Staff ID / Employee ID
+                for client_field in ['StaffNo', 'Staff No', 'Staff ID', 'Employee No', 'EmpNo', 'Employee ID']:
+                    if client_field in client_df.columns and pd.notna(row[client_field]):
+                        if is_nas:
+                            template_row['Staff ID'] = str(row[client_field]).strip()
+                            template_row['Family No.'] = str(row[client_field]).strip()
+                        elif is_almadallah:
+                            template_row['Employee ID'] = str(row[client_field]).strip()
+                        break
+                
+                # Map Nationality
+                for client_field in ['Country', 'Nationality', 'Nation']:
+                    if client_field in client_df.columns and pd.notna(row[client_field]):
+                        template_row['Nationality'] = str(row[client_field]).strip()
+                        break
+                
+                # Map Emirates ID
+                for client_field in ['EIDNumber', 'Emirates ID', 'EmiratesID', 'EID']:
+                    if client_field in client_df.columns and pd.notna(row[client_field]):
+                        eid = str(row[client_field]).strip()
+                        # Format Emirates ID if needed
+                        if eid and '-' not in eid and len(eid.replace(' ', '')) == 15:
+                            digits = eid.replace(' ', '')
+                            eid = f"{digits[:3]}-{digits[3:7]}-{digits[7:14]}-{digits[14]}"
                         
-                        if len(name_parts) >= 3:
-                            # If 3+ words: first=first, middle=second, last=third+
-                            template_row['First Name'] = name_parts[0]
-                            template_row['Middle Name'] = name_parts[1]
-                            template_row['Last Name'] = ' '.join(name_parts[2:])
-                        elif len(name_parts) == 2:
-                            # If 2 words: first=first, middle='.', last=second
-                            template_row['First Name'] = name_parts[0]
-                            template_row['Middle Name'] = '.'
-                            template_row['Last Name'] = name_parts[1]
-                        elif len(name_parts) == 1:
-                            # If 1 word: first=that word, middle='.', last='.'
-                            template_row['First Name'] = name_parts[0]
-                            template_row['Middle Name'] = '.'
-                            template_row['Last Name'] = '.'
+                        if is_nas:
+                            template_row['Emirates Id'] = eid
+                        elif is_almadallah:
+                            template_row['Emirates Id'] = eid
+                        break
+                
+                # Map Passport Number
+                for client_field in ['PassportNum', 'Passport No', 'Passport', 'PassportNumber']:
+                    if client_field in client_df.columns and pd.notna(row[client_field]):
+                        template_row['Passport No'] = str(row[client_field]).strip()
+                        break
+                
+                # Map Unified Number
+                for client_field in ['UIDNo', 'UID', 'Unified No', 'UnifiedNumber']:
+                    if client_field in client_df.columns and pd.notna(row[client_field]):
+                        template_row['Unified No'] = str(row[client_field]).strip()
+                        break
+                
+                # Map Visa File Number
+                for client_field in ['ResisdentFileNumber', 'ResidentFileNumber', 'VisaFileNumber', 'Visa File No']:
+                    if client_field in client_df.columns and pd.notna(row[client_field]):
+                        template_row['Visa File Number'] = str(row[client_field]).strip()
+                        break
+                
+                # Map Mobile Number
+                for client_field in ['EntityContactNumber', 'Mobile', 'MobileNo', 'Phone', 'Contact']:
+                    if client_field in client_df.columns and pd.notna(row[client_field]):
+                        mobile = str(row[client_field]).strip()
+                        if is_nas:
+                            template_row['Mobile No'] = mobile
+                            template_row['Company Phone'] = mobile
+                        elif is_almadallah:
+                            template_row['MOBILE'] = mobile
+                            template_row['COMPANYPHONENUMBER'] = mobile
+                            template_row['LANDLINENO'] = mobile
+                        break
+                
+                # Map Email
+                for client_field in ['EmailID', 'Email', 'EmailAddress', 'EMAIL', 'Mail', 'email', 'Email Address', 'E-mail']:
+                    if client_field in client_df.columns and pd.notna(row[client_field]):
+                        email = str(row[client_field]).strip()
+                        if is_nas:
+                            template_row['Email'] = email
+                            template_row['Company Mail'] = email
+                        elif is_almadallah:
+                            template_row['EMAIL'] = email
+                            template_row['COMPANYEMAILID'] = email
+                        break
+                
+                # Map Gender
+                for client_field in ['Gender', 'Sex']:
+                    if client_field in client_df.columns and pd.notna(row[client_field]):
+                        gender = str(row[client_field]).strip().upper()
+                        if gender in ['M', 'MALE']:
+                            if is_nas:
+                                template_row['Gender'] = 'Male'
+                            else:
+                                template_row['Gender'] = 'Male'
+                        elif gender in ['F', 'FEMALE']:
+                            if is_nas:
+                                template_row['Gender'] = 'Female'
+                            else:
+                                template_row['Gender'] = 'Female'
+                        break
+                
+                # Map Department or Subgroup
+                for client_field in ['Department', 'Dept', 'Division']:
+                    if client_field in client_df.columns and pd.notna(row[client_field]):
+                        if is_nas:
+                            template_row['Department'] = str(row[client_field]).strip()
+                        elif is_almadallah:
+                            template_row['Subgroup Name'] = str(row[client_field]).strip()
+                        break
+                
+                # Map Designation or Rank
+                for client_field in ['Designation', 'JobTitle', 'Occupation', 'Position']:
+                    if client_field in client_df.columns and pd.notna(row[client_field]):
+                        if is_nas:
+                            template_row['Occupation'] = str(row[client_field]).strip()
+                        elif is_almadallah:
+                            template_row['RANK'] = str(row[client_field]).strip()
+                            template_row['Occupation'] = str(row[client_field]).strip()
+                        break
+                
+                # Map Marital Status
+                for client_field in ['MaritalStatus', 'Marital', 'MarriageStatus']:
+                    if client_field in client_df.columns and pd.notna(row[client_field]):
+                        if is_nas:
+                            template_row['Marital Status'] = str(row[client_field]).strip()
+                        break
+                
+                # Map DOB or Date of Birth
+                for client_field in ['DOB', 'DateOfBirth', 'BirthDate']:
+                    if client_field in client_df.columns and pd.notna(row[client_field]):
+                        try:
+                            dob = row[client_field]
+                            if isinstance(dob, pd.Timestamp):
+                                formatted_dob = dob.strftime('%d-%m-%Y')
+                            else:
+                                # Try to parse as date
+                                formatted_dob = pd.to_datetime(dob).strftime('%d-%m-%Y')
                             
-                    # Staff ID and Family No correlation
-                    if 'Staff ID' in template_row and template_row['Staff ID']:
+                            template_row['DOB'] = formatted_dob
+                        except:
+                            template_row['DOB'] = str(row[client_field]).strip()
+                        break
+                
+                # Map Salary for Salary Band
+                for client_field in ['Salary', 'SalaryAmount', 'MonthlySalary']:
+                    if client_field in client_df.columns and pd.notna(row[client_field]):
+                        try:
+                            salary = float(row[client_field])
+                            if salary <= 4000:
+                                template_row['Salary Band'] = 'Below 4000'
+                            else:
+                                template_row['Salary Band'] = 'Above 4000'
+                        except:
+                            template_row['Salary Band'] = 'Above 4000'  # Default if conversion fails
+                        break
+                else:
+                    # Default salary band if no salary field found
+                    template_row['Salary Band'] = 'Above 4000'
+                
+                # SPECIAL HANDLING FOR NAME FIELDS
+                # Try different name field variations
+                name_found = False
+                
+                # Check for separate first/middle/last name fields
+                first_name = ""
+                middle_name = "."
+                last_name = ""
+                
+                for fn_field in ['FirstName', 'First Name', 'FName', 'GivenName']:
+                    if fn_field in client_df.columns and pd.notna(row[fn_field]):
+                        first_name = str(row[fn_field]).strip()
+                        name_found = True
+                        break
+                
+                for mn_field in ['MiddleName', 'Middle Name', 'MName']:
+                    if mn_field in client_df.columns and pd.notna(row[mn_field]):
+                        middle_name = str(row[mn_field]).strip()
+                        if not middle_name:
+                            middle_name = "."
+                        break
+                
+                for ln_field in ['LastName', 'Last Name', 'LName', 'Surname', 'FamilyName']:
+                    if ln_field in client_df.columns and pd.notna(row[ln_field]):
+                        last_name = str(row[ln_field]).strip()
+                        break
+                
+                # Check for full name field if individual components weren't found
+                if not name_found or not first_name:
+                    for name_field in ['Name', 'FullName', 'Full Name', 'EmployeeName', 'FirstName']:  # Added FirstName
+                        if name_field in client_df.columns and pd.notna(row[name_field]):
+                            full_name = str(row[name_field]).strip()
+                            name_parts = full_name.split()
+                            
+                            if len(name_parts) >= 3:
+                                # If 3+ words: first = first, middle = second, last = rest
+                                first_name = name_parts[0]
+                                middle_name = name_parts[1]
+                                last_name = ' '.join(name_parts[2:])
+                            elif len(name_parts) == 2:
+                                # If 2 words: first = first, middle = ".", last = second
+                                first_name = name_parts[0]
+                                middle_name = "."
+                                last_name = name_parts[1]
+                            elif len(name_parts) == 1:
+                                # If 1 word: first = that word, middle = ".", last = ""
+                                first_name = name_parts[0]
+                                middle_name = "."
+                                last_name = ""
+                            
+                            name_found = True
+                            break
+                
+                # Apply the name fields to the template
+                if is_nas:
+                    template_row['First Name'] = first_name
+                    template_row['Middle Name'] = middle_name if middle_name else "."
+                    template_row['Last Name'] = last_name
+                elif is_almadallah:
+                    # For Al Madallah, we need to store in temp variables since 
+                    # it doesn't have the same name fields as NAS
+                    full_name = f"{first_name} {middle_name} {last_name}".replace(" . ", " ").strip()
+                    # We'll use this for other matching fields later
+                
+                # TEMPLATE-SPECIFIC FIELDS
+                
+                # NAS Template specific fields
+                if is_nas:
+                    # Default fields if not set above
+                    if not template_row.get('Contract Name'):
+                        template_row['Contract Name'] = "Farnek Services LLC"
+                    
+                    if not template_row.get('Category'):
+                        template_row['Category'] = "Self"
+                    
+                    if not template_row.get('Relation'):
+                        template_row['Relation'] = "Self"
+                    
+                    # Copy Staff ID to Family No. if not already set
+                    if template_row.get('Staff ID') and not template_row.get('Family No.'):
                         template_row['Family No.'] = template_row['Staff ID']
                     
-                    # Salary Band determination
-                    if 'Salary' in row and pd.notna(row['Salary']):
-                        salary = float(row['Salary'])
-                        if salary <= 4000:
-                            template_row['Salary Band'] = 'Below 4000'
-                        else:
-                            template_row['Salary Band'] = 'Above 4000'
-                    else:
-                        # Default salary band
-                        template_row['Salary Band'] = 'Above 4000'
-                        
-                    # Handle Gender standardization
-                    if 'Gender' in template_row:
-                        gender = template_row['Gender'].upper()
-                        if gender in ['M', 'MALE']:
-                            template_row['Gender'] = 'Male'
-                        elif gender in ['F', 'FEMALE']:
-                            template_row['Gender'] = 'Female'
+                    # Default countries
+                    template_row['Work Country'] = "United Arab Emirates"
+                    template_row['Residence Country'] = "United Arab Emirates"
                     
-                    # Handle Emirates ID formatting
-                    if 'Emirates Id' in template_row and template_row['Emirates Id']:
-                        eid = template_row['Emirates Id']
-                        # Format Emirates ID if needed
-                        if '-' not in eid and len(eid.replace(' ', '')) == 15:
-                            digits = eid.replace(' ', '')
-                            template_row['Emirates Id'] = f"{digits[:3]}-{digits[3:7]}-{digits[7:14]}-{digits[14]}"
+                    # Default commission
+                    template_row['Commission'] = "NO"
                     
-                    # Handle Company Phone and Company Mail
-                    if 'Mobile No' in template_row and template_row['Mobile No']:
-                        template_row['Company Phone'] = template_row['Mobile No']
-                    
-                    if 'Email' in template_row and template_row['Email']:
-                        template_row['Company Mail'] = template_row['Email']
-                    
-                # Al Madallah Template specific mappings
+                    # Make sure Middle Name is "." if empty
+                    if not template_row.get('Middle Name'):
+                        template_row['Middle Name'] = "."
+                
+                # Al Madallah Template specific fields
                 elif is_almadallah:
-                    # Common field mapping for Al Madallah template
-                    field_mapping = {
-                        'StaffNo': 'Employee ID',
-                        'FirstName': None,  # Special handling below
-                        'Country': 'Nationality',
-                        'EIDNumber': 'Emirates Id',
-                        'PassportNum': 'Passport No',
-                        'UIDNo': 'Unified No',
-                        'ResisdentFileNumber': 'Visa File Number',
-                        'EntityContactNumber': 'MOBILE',
-                        'EmailID': 'EMAIL',
-                        'Department': 'Subgroup Name',
-                        'PassportExpDate': None,  # Not directly mapped
-                        'Designation': 'RANK'
-                    }
+                    # Policy category
+                    template_row['POLICYCATEGORY'] = "Standard"
                     
-                    # Apply direct mappings
-                    for client_field, almadallah_field in field_mapping.items():
-                        if client_field in row and pd.notna(row[client_field]) and almadallah_field:
-                            template_row[almadallah_field] = str(row[client_field]).strip()
+                    # Establishment type
+                    template_row['ESTABLISHMENTTYPE'] = "Establishment"
                     
-                    # Almadallah specific fields
-                    template_row['POLICYCATEGORY'] = 'Standard'
-                    template_row['ESTABLISHMENTTYPE'] = 'Establishment'
-                    template_row['Commission'] = 'NO'
-                    template_row['COMPANYPHONENUMBER'] = template_row.get('MOBILE', '')
-                    template_row['COMPANYEMAILID'] = template_row.get('EMAIL', '')
-                    template_row['LANDLINENO'] = template_row.get('MOBILE', '')
-                    template_row['VIP'] = 'NO'
-                    template_row['WPDAYS'] = '0'
+                    # Commission
+                    template_row['Commission'] = "NO"
                     
                     # Set Subgroup Name if empty
                     if not template_row.get('Subgroup Name'):
-                        template_row['Subgroup Name'] = 'GENERAL'
+                        template_row['Subgroup Name'] = "GENERAL"
                     
-                    # Set Salary Band
-                    if 'Salary' in row and pd.notna(row['Salary']):
-                        salary = float(row['Salary'])
-                        if salary <= 4000:
-                            template_row['Salary Band'] = 'Below 4000'
-                        else:
-                            template_row['Salary Band'] = 'Above 4000'
-                    else:
-                        # Default salary band
-                        template_row['Salary Band'] = 'Above 4000'
+                    # VIP status
+                    template_row['VIP'] = "NO"
+                    
+                    # Waiting period days
+                    template_row['WPDAYS'] = "0"
+                    
+                    # Set POLICYSEQUENCE if needed
+                    if 'POLICYSEQUENCE' in template_columns and not template_row.get('POLICYSEQUENCE'):
+                        template_row['POLICYSEQUENCE'] = "1"
                 
-                # Common fields for both templates
+                # COMMON FIELDS FOR BOTH TEMPLATES
                 
                 # Set Effective Date (today's date)
-                effective_date_field = 'Effective Date'
-                template_row[effective_date_field] = datetime.now().strftime('%d/%m/%Y')
+                today = datetime.now().strftime('%d/%m/%Y')
+                for field in ['Effective Date', 'Effective Date ']:  # Note the space after Date in second field
+                    if field in template_columns:
+                        template_row[field] = today
                 
-                # Set Commission
-                template_row['Commission'] = 'NO'
-                
-                # Set default country values
-                if 'Work Country' in template_columns:
-                    template_row['Work Country'] = 'United Arab Emirates'
-                if 'Residence Country' in template_columns:
-                    template_row['Residence Country'] = 'United Arab Emirates'
-                    
-                # Handle visa region and member type based on visa file number
-                if 'Visa File Number' in template_row and template_row['Visa File Number']:
-                    visa_file = template_row['Visa File Number']
-                    digits = ''.join(filter(str.isdigit, visa_file))
-                    
-                    # Set emirate-specific fields
-                    emirate_fields = {
-                        'Work Emirate': '',
-                        'Residence Emirate': '',
-                        'Work Region': '',
-                        'Residence Region': '',
-                        'Visa Issuance Emirate': '',
-                        'Member Type': ''
-                    }
-                    
-                    # Only set fields that exist in the template
-                    emirate_fields = {k: v for k, v in emirate_fields.items() if k in template_columns}
+                # Handle emirate-based fields based on visa file number
+                visa_file = template_row.get('Visa File Number')
+                if visa_file:
+                    digits = ''.join(filter(str.isdigit, str(visa_file)))
                     
                     if digits.startswith('10'):  # Abu Dhabi
-                        for field in emirate_fields:
-                            if field == 'Work Emirate' or field == 'Residence Emirate' or field == 'Visa Issuance Emirate':
-                                emirate_fields[field] = 'Abu Dhabi'
-                            elif field == 'Work Region' or field == 'Residence Region':
-                                emirate_fields[field] = 'Abu Dhabi - Abu Dhabi' if is_nas else 'Al Ain City'
-                            elif field == 'Member Type':
-                                emirate_fields[field] = 'Expat whose residence issued other than Dubai'
+                        if is_nas:
+                            template_row['Work Emirate'] = 'Abu Dhabi'
+                            template_row['Residence Emirate'] = 'Abu Dhabi'
+                            template_row['Work Region'] = 'Abu Dhabi - Abu Dhabi'
+                            template_row['Residence Region'] = 'Abu Dhabi - Abu Dhabi'
+                            template_row['Visa Issuance Emirate'] = 'Abu Dhabi'
+                            template_row['Member Type'] = 'Expat whose residence issued other than Dubai'
+                        elif is_almadallah:
+                            template_row['Work Emirate'] = 'Abu Dhabi'
+                            template_row['Residence Emirate'] = 'Abu Dhabi'
+                            template_row['Work Region'] = 'Al Ain City'
+                            template_row['Residence Region'] = 'Al Ain City'
+                            template_row['Visa Issuance Emirate'] = 'Abu Dhabi'
+                            template_row['Member Type'] = 'Expat whose residence issued other than Dubai'
                     elif digits.startswith('20'):  # Dubai
-                        for field in emirate_fields:
-                            if field == 'Work Emirate' or field == 'Residence Emirate' or field == 'Visa Issuance Emirate':
-                                emirate_fields[field] = 'Dubai'
-                            elif field == 'Work Region' or field == 'Residence Region':
-                                emirate_fields[field] = 'Dubai - Abu Hail' if is_nas else 'DUBAI (DISTRICT UNKNOWN)'
-                            elif field == 'Member Type':
-                                emirate_fields[field] = 'Expat whose residence issued in Dubai'
-                    
-                    # Apply emirate fields to template row
-                    for field, value in emirate_fields.items():
-                        if value:  # Only set non-empty values
-                            template_row[field] = value
+                        if is_nas:
+                            template_row['Work Emirate'] = 'Dubai'
+                            template_row['Residence Emirate'] = 'Dubai'
+                            template_row['Work Region'] = 'Dubai - Abu Hail'
+                            template_row['Residence Region'] = 'Dubai - Abu Hail'
+                            template_row['Visa Issuance Emirate'] = 'Dubai'
+                            template_row['Member Type'] = 'Expat whose residence issued in Dubai'
+                        elif is_almadallah:
+                            template_row['Work Emirate'] = 'Dubai'
+                            template_row['Residence Emirate'] = 'Dubai'
+                            template_row['Work Region'] = 'DUBAI (DISTRICT UNKNOWN)'
+                            template_row['Residence Region'] = 'DUBAI (DISTRICT UNKNOWN)'
+                            template_row['Visa Issuance Emirate'] = 'Dubai'
+                            template_row['Member Type'] = 'Expat whose residence issued in Dubai'
+                else:
+                    # Default to Dubai if no visa file number
+                    if is_nas:
+                        template_row['Work Emirate'] = 'Dubai'
+                        template_row['Residence Emirate'] = 'Dubai'
+                        template_row['Work Region'] = 'Dubai - Abu Hail'
+                        template_row['Residence Region'] = 'Dubai - Abu Hail'
+                        template_row['Visa Issuance Emirate'] = 'Dubai'
+                        template_row['Member Type'] = 'Expat whose residence issued in Dubai'
+                    elif is_almadallah:
+                        template_row['Work Emirate'] = 'Dubai'
+                        template_row['Residence Emirate'] = 'Dubai'
+                        template_row['Work Region'] = 'DUBAI (DISTRICT UNKNOWN)'
+                        template_row['Residence Region'] = 'DUBAI (DISTRICT UNKNOWN)'
+                        template_row['Visa Issuance Emirate'] = 'Dubai'
+                        template_row['Member Type'] = 'Expat whose residence issued in Dubai'
                 
-                # Set default Member Type if not already set
-                if 'Member Type' in template_columns and not template_row.get('Member Type'):
-                    template_row['Member Type'] = 'Expat whose residence issued in Dubai'
-                
-                # Set Category and Relation defaults for NAS
-                if is_nas:
-                    if 'Category' in template_columns and not template_row.get('Category'):
-                        template_row['Category'] = 'Self'
-                    if 'Relation' in template_columns and not template_row.get('Relation'):
-                        template_row['Relation'] = 'Self'
-                
-                # Set Middle Name to '.' if empty (NAS specific)
-                if is_nas and 'Middle Name' in template_columns and not template_row.get('Middle Name'):
-                    template_row['Middle Name'] = '.'
-                    
                 # Add row to result DataFrame
-                result_df = pd.concat([result_df, pd.DataFrame([template_row])], ignore_index=True)
+                result_rows = []
+                for col in template_columns:
+                    if col in template_row:
+                        # If we have a value for this column, use it
+                        result_rows.append(template_row[col])
+                    else:
+                        # Otherwise, use empty string
+                        result_rows.append("")
+                
+                # Add the new row to the result DataFrame
+                result_df.loc[len(result_df)] = result_rows
                 
                 # Provide progress updates for large files
-                if (idx + 1) % 100 == 0 or idx == len(df) - 1:
-                    logger.info(f"Processed {idx + 1}/{len(df)} rows")
+                if (idx + 1) % 100 == 0 or idx == len(client_df) - 1:
+                    logger.info(f"Processed {idx + 1}/{len(client_df)} rows")
+            
+            # Final data cleaning
+            # Make sure all text fields are strings
+            for col in result_df.columns:
+                result_df[col] = result_df[col].astype(str)
+                # Replace "nan" with empty string
+                result_df[col] = result_df[col].replace("nan", "")
+            
+            # Make sure Middle Name is "." for NAS template
+            if is_nas and 'Middle Name' in result_df.columns:
+                result_df['Middle Name'] = result_df['Middle Name'].apply(lambda x: "." if not x or x == "" else x)
             
             # Write the result to the output file
             result_df.to_excel(output_path, index=False)

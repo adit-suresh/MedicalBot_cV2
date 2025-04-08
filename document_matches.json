@@ -11,7 +11,6 @@
       "type": "unknown",
       "file_path": "processed_submissions\\Fw_Addition___NAS___Nijanthan___Test_15_20250408_1\\Nijanthan_pp.pdf",
       "key_identifiers": {
-        "name": "THANGAVEL NIJANTHAN",
         "passport": "M1104568"
       }
     },
@@ -19,7 +18,7 @@
       "type": "visa",
       "file_path": "processed_submissions\\Fw_Addition___NAS___Nijanthan___Test_15_20250408_1\\VISA_-_NIJANTHAN.pdf",
       "key_identifiers": {
-        "passport": "Jahili"
+        "name": "NIJANTHAN THANGAVEL THANGAVEL"
       }
     }
   ],
