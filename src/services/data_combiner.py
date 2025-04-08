@@ -1058,6 +1058,9 @@ class DataCombiner:
         """Map combined data to template columns with improved field detection."""
         mapped = {}
         
+        # Detect template type based on columns - check for Al Madallah specific fields
+        is_almadallah = any(col in template_columns for col in ['POLICYCATEGORY', 'ENTITYID', 'POLICYSEQUENCE'])
+        
         for col in template_columns:
             # First normalize the column name for matching
             normalized_col = self._normalize_column_name(col)
@@ -1078,38 +1081,171 @@ class DataCombiner:
             mapped_value = self.DEFAULT_VALUE
             found_mapping = False
             
-            for field, variations in self._field_mapping.items():
-                # Handle dictionary-style field mapping
-                if isinstance(variations, dict) and 'priority' in variations:
-                    variations_list = variations['priority']
-                else:
-                    variations_list = variations
-                    
-                # Check if template column matches any variation
-                if col in variations_list or normalized_col in variations_list:
-                    if field in data:
-                        mapped_value = data[field]
-                        field_mappings[col] = field
-                        found_mapping = True
-                        break
-                # Check if any field variation matches data keys
-                elif field == normalized_col and any(var in data for var in variations_list):
-                    for var in variations_list:
-                        if var in data:
-                            mapped_value = data[var]
-                            field_mappings[col] = var
+            # Al Madallah specific mappings if detected
+            if is_almadallah:
+                almadallah_mappings = {
+                    'First Name': ['first_name', 'given_names'],
+                    'Middle Name': ['middle_name'],
+                    'Last Name': ['last_name', 'surname'],
+                    'Full Name': ['full_name', 'name'],
+                    'DOB': ['date_of_birth', 'dob', 'birth_date'],
+                    'Gender': ['gender', 'sex'],
+                    'Marital Status': ['marital_status', 'civil_status'],
+                    'Relation': ['relation', 'relationship'],
+                    'Employee ID': ['staff_id', 'employee_id', 'employee_no'],
+                    'RANK': ['rank', 'position'],
+                    'Subgroup Name': ['subgroup', 'department', 'division'],
+                    'POLICYCATEGORY': ['policy_category', 'plan_type', 'policy_type'],
+                    'Nationality': ['nationality', 'citizenship', 'nation'],
+                    'Effective Date': ['effective_date', 'start_date', 'enrollment_date'],
+                    'Emirates Id': ['emirates_id', 'eid', 'id_number'],
+                    'PAYERCARDNO': ['card_number', 'member_id', 'insurance_id'],
+                    'EMIRATESIDAPPLNUM': ['emirates_id_application', 'eid_application'],
+                    'Birth Certificate Number': ['birth_certificate', 'birth_cert_no'],
+                    'Unified No': ['unified_no', 'unified_number', 'uid_no'],
+                    'Visa File Number': ['visa_file_number', 'entry_permit_no', 'visa_number'],
+                    'Residence Emirate': ['residence_emirate', 'home_emirate'],
+                    'Residence Region': ['residence_region', 'home_region'],
+                    'Member Type': ['member_type', 'enrollee_type'],
+                    'Occupation': ['profession', 'job_title', 'occupation'],
+                    'Work Emirate': ['work_emirate', 'office_emirate'],
+                    'Work Region': ['work_region', 'office_region'],
+                    'Visa Issuance Emirate': ['visa_issuance_emirate', 'visa_emirate'],
+                    'Passport No': ['passport_number', 'passport_no', 'passport'],
+                    'Salary Band': ['salary_band', 'salary_range', 'income_band'],
+                    'Commission': ['commission', 'comm'],
+                    'ESTABLISHMENTTYPE': ['establishment_type', 'company_type'],
+                    'ENTITYID': ['entity_id', 'legal_entity_id', 'corporate_id'],
+                    'COMPANYPHONENUMBER': ['company_phone', 'office_phone', 'business_phone'],
+                    'COMPANYEMAILID': ['company_email', 'business_email', 'work_email'],
+                    'LANDLINENO': ['landline', 'home_phone', 'telephone'],
+                    'MOBILE': ['mobile_no', 'mobile', 'cell_phone'],
+                    'EMAIL': ['email', 'personal_email', 'email_address'],
+                    'DHAID': ['dha_id', 'dubai_health_id'],
+                    'MOHID': ['moh_id', 'ministry_health_id'],
+                    'WPDAYS': ['waiting_period', 'wp_days'],
+                    'VIP': ['vip', 'vip_status'],
+                    'POLICYSEQUENCE': ['policy_sequence', 'policy_order']
+                }
+                
+                if col in almadallah_mappings:
+                    for field_name in almadallah_mappings[col]:
+                        if field_name in data and data[field_name] != self.DEFAULT_VALUE:
+                            mapped_value = data[field_name]
+                            field_mappings[col] = field_name
                             found_mapping = True
                             break
-                    if found_mapping:
-                        break
+                            
+                # Special handling for Al Madallah default values
+                if not found_mapping:
+                    # Set specific defaults for Al Madallah template
+                    if col == 'Marital Status' and not found_mapping:
+                        mapped_value = 'Married'  # Default value for Marital Status
+                        field_mappings[col] = 'default'
+                        found_mapping = True
+                    elif col == 'Relation' and not found_mapping:
+                        mapped_value = 'Self'  # Default value for Relation
+                        field_mappings[col] = 'default'
+                        found_mapping = True
+                    elif col == 'POLICYCATEGORY' and not found_mapping:
+                        mapped_value = 'Standard'  # Default value for POLICYCATEGORY
+                        field_mappings[col] = 'default'
+                        found_mapping = True
+                    elif col == 'Member Type' and not found_mapping:
+                        mapped_value = 'Expat whose residence issued in Dubai'  # Default based on visa
+                        field_mappings[col] = 'default'
+                        found_mapping = True
+                    elif col == 'Salary Band' and not found_mapping:
+                        mapped_value = 'Above 4000'  # Default value
+                        field_mappings[col] = 'default'
+                        found_mapping = True
+                    elif col == 'Commission' and not found_mapping:
+                        mapped_value = 'NO'  # Default value
+                        field_mappings[col] = 'default'
+                        found_mapping = True
+                    elif col == 'ESTABLISHMENTTYPE' and not found_mapping:
+                        mapped_value = 'Establishment'  # Default value
+                        field_mappings[col] = 'default'
+                        found_mapping = True
+                    elif col == 'Subgroup Name' and not found_mapping:
+                        mapped_value = 'GENERAL'  # Default value
+                        field_mappings[col] = 'default'
+                        found_mapping = True
+            
+            # If Al Madallah specific mapping didn't find a match, fall back to general mappings
+            if not found_mapping:
+                for field, variations in self._field_mapping.items():
+                    # Handle dictionary-style field mapping
+                    if isinstance(variations, dict) and 'priority' in variations:
+                        variations_list = variations['priority']
+                    else:
+                        variations_list = variations
+                        
+                    # Check if template column matches any variation
+                    if col in variations_list or normalized_col in variations_list:
+                        if field in data:
+                            mapped_value = data[field]
+                            field_mappings[col] = field
+                            found_mapping = True
+                            break
+                    # Check if any field variation matches data keys
+                    elif field == normalized_col and any(var in data for var in variations_list):
+                        for var in variations_list:
+                            if var in data:
+                                mapped_value = data[var]
+                                field_mappings[col] = var
+                                found_mapping = True
+                                break
+                        if found_mapping:
+                            break
             
             # Use default value if no mapping found
             if not found_mapping:
                 field_mappings[col] = None
                 
             mapped[col] = self._format_output_value(mapped_value, normalized_col)
+        
+        # Additional Al Madallah template-specific processing
+        if is_almadallah:
+            # Always set ESTABLISHMENTTYPE to "Establishment"
+            mapped['ESTABLISHMENTTYPE'] = 'Establishment'
             
-        # Check for and remove duplicate Effective Date at end
+            # Ensure Emirate fields are properly set based on visa file number
+            if 'Visa File Number' in mapped and mapped['Visa File Number'] != self.DEFAULT_VALUE:
+                visa_number = mapped['Visa File Number']
+                digits = ''.join(filter(str.isdigit, str(visa_number)))
+                
+                if digits.startswith('10'):  # Abu Dhabi
+                    # Set Abu Dhabi-specific values per updated requirements
+                    mapped['Residence Emirate'] = 'Abu Dhabi'
+                    mapped['Work Emirate'] = 'Abu Dhabi'
+                    mapped['Residence Region'] = 'Abu Dhabi - Abu Dhabi'
+                    mapped['Work Region'] = 'Abu Dhabi - Abu Dhabi'
+                    mapped['Visa Issuance Emirate'] = 'Abu Dhabi'
+                    mapped['Member Type'] = 'Expat whose residence issued other than Dubai'
+                elif digits.startswith('20'):  # Dubai
+                    # Set Dubai-specific values per updated requirements
+                    mapped['Residence Emirate'] = 'Dubai'
+                    mapped['Work Emirate'] = 'Dubai'
+                    mapped['Residence Region'] = 'Dubai - Abu Hail'
+                    mapped['Work Region'] = 'Dubai - Abu Hail'
+                    mapped['Visa Issuance Emirate'] = 'Dubai'
+                    mapped['Member Type'] = 'Expat whose residence issued in Dubai'
+            
+            # Copy COMPANYPHONENUMBER to LANDLINENO and MOBILE if they're not set
+            if 'COMPANYPHONENUMBER' in mapped and mapped['COMPANYPHONENUMBER'] != self.DEFAULT_VALUE:
+                if 'LANDLINENO' not in mapped or mapped['LANDLINENO'] == self.DEFAULT_VALUE:
+                    mapped['LANDLINENO'] = mapped['COMPANYPHONENUMBER']
+                
+                if 'MOBILE' not in mapped or mapped['MOBILE'] == self.DEFAULT_VALUE:
+                    mapped['MOBILE'] = mapped['COMPANYPHONENUMBER']
+            
+            # Copy COMPANYEMAILID to EMAIL if it's not set
+            if 'COMPANYEMAILID' in mapped and mapped['COMPANYEMAILID'] != self.DEFAULT_VALUE:
+                if 'EMAIL' not in mapped or mapped['EMAIL'] == self.DEFAULT_VALUE:
+                    mapped['EMAIL'] = mapped['COMPANYEMAILID']
+        
+        # Check for and remove duplicate Effective Date at end (preserved from original code)
         for key in list(mapped.keys()):
             if key != 'Effective Date' and key.lower() == 'effective date':
                 # Remove the duplicate
@@ -1361,7 +1497,7 @@ class DataCombiner:
             # Extract just digits
             digits = ''.join(filter(str.isdigit, str(visa_file_number)))
             
-            if digits.startswith('201'):
+            if digits.startswith('20'):
                 # Dubai values
                 row_data['Visa Issuance Emirate'] = 'Dubai'
                 row_data['Work Emirate'] = 'Dubai'
@@ -1369,7 +1505,7 @@ class DataCombiner:
                 row_data['Work Region'] = 'DUBAI (DISTRICT UNKNOWN)'
                 row_data['Residence Region'] = 'DUBAI (DISTRICT UNKNOWN)'
                 row_data['Member Type'] = 'Expat whose residence issued in Dubai'
-            elif digits.startswith('101'):
+            elif digits.startswith('10'):
                 # Abu Dhabi values
                 row_data['Visa Issuance Emirate'] = 'Abu Dhabi'
                 row_data['Work Emirate'] = 'Abu Dhabi'

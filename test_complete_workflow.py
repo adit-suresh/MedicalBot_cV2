@@ -12,6 +12,7 @@ import json
 import argparse
 import shutil
 import time
+import copy 
 
 # Add project root to Python path
 project_root = os.path.dirname(os.path.abspath(__file__))
@@ -101,7 +102,7 @@ class WorkflowTester:
         subject_lower = subject.lower()
         
         # Check for Al Madallah first
-        if 'al madallah' in subject_lower or 'almadallah' in subject_lower:
+        if any(term in subject_lower for term in ['al madallah', 'almadallah', 'madallah', 'al-madallah']):
             template = 'templates/al_madallah.xlsx'
             logger.info(f"Selected Al Madallah template: {template}")
             return template
@@ -367,6 +368,50 @@ class WorkflowTester:
             except Exception as e:
                 logger.error(f"Error categorizing files: {str(e)}", exc_info=True)
                 raise Exception(f"Failed to categorize files: {str(e)}")
+            
+            # Check if we have just one Excel file and no documents (special case for large client Excel)
+            if len(saved_files) == 1 and saved_files[0].lower().endswith(('.xlsx', '.xls')):
+                try:
+                    excel_path = saved_files[0]
+                    
+                    # Check if this is a large client Excel file
+                    try:
+                        df = pd.read_excel(excel_path)
+                        # If it has specific columns we expect in the large client format
+                        if set(['StaffNo', 'FirstName', 'Country', 'EIDNumber']).issubset(df.columns) and len(df) > 100:
+                            logger.info(f"Detected large client Excel file with {len(df)} rows")
+                            
+                            # Process as large client Excel
+                            output_path = os.path.join(
+                                submission_dir,
+                                f"final_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                            )
+                            
+                            result = self._process_large_client_excel(excel_path, template_path, output_path)
+                            
+                            if result['status'] == 'success':
+                                logger.info(f"Successfully processed large client Excel: {result['rows_processed']} rows")
+                                # Skip the rest of the document processing, use the processed output directly
+                                return {
+                                    "status": "success",
+                                    "process_id": process_id,
+                                    "submission_dir": submission_dir,
+                                    "documents": {},
+                                    "excel_files": [excel_path],
+                                    "documents_processed": [],
+                                    "rows_processed": result['rows_processed']
+                                }
+                            else:
+                                logger.error(f"Failed to process large client Excel: {result.get('error', 'Unknown error')}")
+                                # Continue with normal processing
+                        else:
+                            logger.info("Not a large client Excel file or too few rows, processing normally")
+                    except Exception as e:
+                        logger.warning(f"Error checking for large client Excel: {str(e)}")
+                        # Continue with normal processing
+                except Exception as e:
+                    logger.error(f"Error in large client Excel detection: {str(e)}")
+                    # Continue with normal processing
 
             # Step 4: Process all documents
             try:
@@ -421,45 +466,51 @@ class WorkflowTester:
             try:
                 logger.info(f"Processing {len(excel_files)} Excel files")
                 all_excel_rows = []  # Initialize again to be safe
-                excel_row_identifiers = {}  # Track identifiers for mapping documents to rows
                 
                 for excel_path in excel_files:
                     try:
                         df, errors = self.excel_processor.process_excel(excel_path, dayfirst=True)
                         if not df.empty:
-                            # Process all rows
-                            for idx, row in df.iterrows():
-                                row_dict = row.to_dict()
+                            # Process all rows - create DEEP COPIES to ensure no shared references
+                            for _, row in df.iterrows():
+                                # Create a deep copy of each row to prevent reference sharing
+                                row_dict = copy.deepcopy(row.to_dict())
+                                
+                                # NEW CODE: Split names according to requirements
+                                if 'First Name' in row_dict and row_dict['First Name']:
+                                    full_name = str(row_dict['First Name']).strip()
+                                    name_parts = full_name.split()
+                                    
+                                    if len(name_parts) >= 3:
+                                        # First word as first name, second as middle, third+ as last
+                                        first_name = name_parts[0]
+                                        middle_name = name_parts[1]
+                                        last_name = ' '.join(name_parts[2:])
+                                        
+                                        row_dict['First Name'] = first_name
+                                        row_dict['Middle Name'] = middle_name
+                                        row_dict['Last Name'] = last_name
+                                        
+                                        logger.info(f"Split name '{full_name}' into First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
+                                    elif len(name_parts) == 2:
+                                        # First word as first name, '.' as middle, second as last
+                                        first_name = name_parts[0]
+                                        middle_name = '.'
+                                        last_name = name_parts[1]
+                                        
+                                        row_dict['First Name'] = first_name
+                                        row_dict['Middle Name'] = middle_name
+                                        row_dict['Last Name'] = last_name
+                                        
+                                        logger.info(f"Split name '{full_name}' into First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
+                                
                                 all_excel_rows.append(row_dict)
-                                
-                                # Create identifier from staff ID, passport number, and/or name
-                                identifier_parts = []
-                                
-                                # Try different field names for key fields
-                                for field_name in ['staff_id', 'Staff ID', 'StaffID']:
-                                    if field_name in row_dict and row_dict[field_name] not in [None, '', '.']:
-                                        identifier_parts.append(str(row_dict[field_name]))
-                                        break
-                                        
-                                for field_name in ['passport_no', 'Passport No', 'passport_number', 'Passport Number']:
-                                    if field_name in row_dict and row_dict[field_name] not in [None, '', '.']:
-                                        identifier_parts.append(str(row_dict[field_name]))
-                                        break
-                                        
-                                for field_name in ['full_name', 'name', 'First Name', 'first_name']:
-                                    if field_name in row_dict and row_dict[field_name] not in [None, '', '.']:
-                                        identifier_parts.append(str(row_dict[field_name]))
-                                        break
-                                
-                                row_id = "_".join(identifier_parts)
-                                excel_row_identifiers[idx] = row_id
                             
                             logger.info(f"Processed Excel file with {len(df)} rows")
                         if errors:
                             logger.warning(f"Excel validation errors: {errors}")
                     except Exception as e:
                         logger.error(f"Error processing Excel file {excel_path}: {str(e)}", exc_info=True)
-                        # Continue with other Excel files instead of failing
                         logger.warning(f"Continuing with partial data due to Excel processing error")
                 
                 logger.info(f"Extracted {len(all_excel_rows)} rows from Excel files")
@@ -471,7 +522,7 @@ class WorkflowTester:
             if document_paths and all_excel_rows:
                 logger.info(f"Attempting to match {len(document_paths)} documents to {len(all_excel_rows)} employees")
                 
-                # Process each document to extract data
+                # Process each document type to extract data
                 doc_data_by_type = {}
                 for doc_type, file_path in document_paths.items():
                     try:
@@ -492,201 +543,112 @@ class WorkflowTester:
                     except Exception as e:
                         logger.error(f"Error processing {doc_type} document: {str(e)}")
                 
-                # Only do document matching if we have multiple rows
-                if len(all_excel_rows) > 1:
-                    # Extract name from documents for matching
-                    extracted_names = []
+                # CRITICAL FIX: Process each row individually with its own copy of data
+                processed_rows = []
+                
+                for idx, row in enumerate(all_excel_rows):
+                    # Create a deep copy of the row to ensure no reference sharing
+                    row_copy = copy.deepcopy(row)
+                    
+                    # Get employee identifiers for matching
+                    first_name = str(row_copy.get('First Name', '')).strip()
+                    last_name = str(row_copy.get('Last Name', '')).strip()
+                    employee_name = f"{first_name} {last_name}".strip()
+                    staff_id = str(row_copy.get('Staff ID', '')).strip()
+                    passport_no = str(row_copy.get('Passport No', '')).strip()
+                    
+                    logger.info(f"Processing row {idx}: Name='{employee_name}', Staff ID='{staff_id}', Passport No='{passport_no}'")
+                    
+                    # Try to match this employee to document data
+                    doc_match_found = False
+                    
+                    # Match using name, passport number, or any other identifying field
                     for doc_type, doc_data in doc_data_by_type.items():
-                        # Try different name fields
-                        name = None
+                        # Try to match this row to this document
+                        match_score = 0
+                        
+                        # Check passport number match (highest priority)
+                        if 'passport_number' in doc_data and doc_data['passport_number'] != self.DEFAULT_VALUE:
+                            if passport_no and doc_data['passport_number'].lower() == passport_no.lower():
+                                match_score += 100  # High score for passport match
+                                logger.info(f"Matched row {idx} to {doc_type} by passport number")
+                        
+                        # Check name match (medium priority)
+                        doc_name = None
                         for field in ['full_name', 'name']:
                             if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
-                                name = doc_data[field]
+                                doc_name = doc_data[field]
                                 break
                         
-                        # If no direct name field, try surname + given names
-                        if not name and 'surname' in doc_data and 'given_names' in doc_data:
-                            if doc_data['surname'] != self.DEFAULT_VALUE and doc_data['given_names'] != self.DEFAULT_VALUE:
-                                name = f"{doc_data['given_names']} {doc_data['surname']}"
+                        if doc_name and employee_name:
+                            # Calculate name similarity
+                            doc_parts = set(doc_name.lower().split())
+                            emp_parts = set(employee_name.lower().split())
+                            common_parts = doc_parts.intersection(emp_parts)
+                            
+                            if common_parts:
+                                similarity = len(common_parts) / max(len(doc_parts), len(emp_parts))
+                                match_score += int(similarity * 50)  # Medium score for name match
+                                logger.info(f"Matched row {idx} to {doc_type} by name with score {similarity:.2f}")
                         
-                        if name:
-                            extracted_names.append(name)
-                            logger.info(f"Found name in {doc_type}: {name}")
+                        # If this document appears to match this employee
+                        if match_score >= 30:  # Threshold for considering a match
+                            doc_match_found = True
+                            
+                            # Apply document data to this row
+                            for key, value in doc_data.items():
+                                if value != self.DEFAULT_VALUE:
+                                    # Skip name fields since we're using Excel data
+                                    if key in ['full_name', 'name', 'surname', 'given_names']:
+                                        continue
+                                        
+                                    # Map document fields to Excel fields
+                                    if key == 'passport_number':
+                                        row_copy['Passport No'] = value
+                                    elif key == 'date_of_birth':
+                                        row_copy['DOB'] = value
+                                    elif key == 'nationality':
+                                        row_copy['Nationality'] = value
+                                    elif key == 'gender' or key == 'sex':
+                                        if value.upper() in ['M', 'MALE']:
+                                            row_copy['Gender'] = 'Male'
+                                        elif value.upper() in ['F', 'FEMALE']:
+                                            row_copy['Gender'] = 'Female'
+                                    elif key == 'emirates_id':
+                                        row_copy['Emirates Id'] = value
+                                    elif key == 'unified_no':
+                                        row_copy['Unified No'] = value
+                                    elif key == 'visa_file_number' or key == 'entry_permit_no':
+                                        row_copy['Visa File Number'] = value
+                                    elif key == 'mobile_no' or key == 'mobile':
+                                        # Only update if Mobile No is empty
+                                        if 'Mobile No' not in row_copy or not row_copy['Mobile No'] or row_copy['Mobile No'] == self.DEFAULT_VALUE:
+                                            row_copy['Mobile No'] = value
+                                            
+                                        # Only copy to Company Phone if empty
+                                        if 'Company Phone' not in row_copy or not row_copy['Company Phone'] or row_copy['Company Phone'] == self.DEFAULT_VALUE:
+                                            row_copy['Company Phone'] = value
+                                    elif key == 'email':
+                                        # Only update if Email is empty
+                                        if 'Email' not in row_copy or not row_copy['Email'] or row_copy['Email'] == self.DEFAULT_VALUE:
+                                            row_copy['Email'] = value
+                                            
+                                        # Only copy to Company Mail if empty
+                                        if 'Company Mail' not in row_copy or not row_copy['Company Mail'] or row_copy['Company Mail'] == self.DEFAULT_VALUE:
+                                            row_copy['Company Mail'] = value
                     
-                    # If we found names in documents, try to match
-                    if extracted_names:
-                        # Map to track which rows matched
-                        matched_rows = []
-                        matched_indices = set()
-                        unmatched_rows = []
-                        
-                        # For each Excel row, try to find a matching document name
-                        for idx, row in enumerate(all_excel_rows):
-                            # Get employee name from Excel
-                            first_name = str(row.get('First Name', '')).strip()
-                            last_name = str(row.get('Last Name', '')).strip()
-                            employee_name = f"{first_name} {last_name}".strip()
-                            
-                            logger.info(f"Row {idx} employee name from Excel: '{employee_name}', First: '{first_name}', Last: '{last_name}'")
-                            
-                            # Log all document names for debugging
-                            logger.info(f"Document names available for matching: {extracted_names}")
-                            
-                            best_match = None
-                            best_score = 0
-                            
-                            # Compare with each extracted name
-                            for doc_name in extracted_names:
-                                # Calculate similarity
-                                doc_parts = set(doc_name.lower().split())
-                                emp_parts = set(employee_name.lower().split())
-                                common_parts = doc_parts.intersection(emp_parts)
-                                
-                                if common_parts:
-                                    score = len(common_parts) / max(len(doc_parts), len(emp_parts))
-                                    if score > best_score:
-                                        best_score = score
-                                        best_match = doc_name
-                            
-                            # If good match found (threshold 0.3)
-                            if best_match and best_score > 0.3:
-                                logger.info(f"Row {idx} matched to '{best_match}' with score {best_score:.2f}")
-                                
-                                # Create combined row with document data - PRESERVE ORIGINAL NAMES FIRST
-                                combined_row = row.copy()
-                                
-                                # Store original names to ensure they don't get overwritten unless explicitly matched
-                                original_first_name = combined_row.get('First Name', '')
-                                original_last_name = combined_row.get('Last Name', '')
-                                
-                                logger.info(f"Original row data before modification: Last Name: '{original_last_name}', First Name: '{original_first_name}'")
-                                
-                                # Add document data to this row
-                                for doc_type, doc_data in doc_data_by_type.items():
-                                    # Only apply data if it relates to the matched name
-                                    doc_name = None
-                                    for field in ['full_name', 'name']:
-                                        if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
-                                            doc_name = doc_data[field]
-                                            break
-                                    
-                                    if not doc_name and 'surname' in doc_data and 'given_names' in doc_data:
-                                        if doc_data['surname'] != self.DEFAULT_VALUE and doc_data['given_names'] != self.DEFAULT_VALUE:
-                                            doc_name = f"{doc_data['given_names']} {doc_data['surname']}"
-                                    
-                                    # If this document matches the current best match
-                                    if doc_name and doc_name.lower() == best_match.lower():
-                                        # Apply document data to this row
-                                        for key, value in doc_data.items():
-                                            if value != self.DEFAULT_VALUE:
-                                                # Special handling for name fields - BE MORE CAREFUL HERE
-                                                if key == 'full_name':
-                                                    # SKIP updating names if both first and last name already exist and are not empty
-                                                    if original_first_name and original_last_name:
-                                                        logger.info(f"Skipping full_name update as original names exist: {original_first_name} {original_last_name}")
-                                                        continue
-                                                        
-                                                    # Only update name if it's substantially different
-                                                    if len(common_parts) / len(doc_parts) < 0.8:
-                                                        # Try to split full name into parts
-                                                        parts = value.split()
-                                                        if len(parts) >= 2:
-                                                            # Only update if original is empty
-                                                            if not original_first_name:
-                                                                combined_row['First Name'] = parts[0]
-                                                            if not original_last_name:
-                                                                combined_row['Last Name'] = parts[-1]
-                                                            if len(parts) > 2 and 'Middle Name' in combined_row:
-                                                                combined_row['Middle Name'] = ' '.join(parts[1:-1])
-                                                elif key == 'surname':
-                                                    # CRITICAL FIX: Only update surname if the original last name is empty
-                                                    if not original_last_name:
-                                                        logger.info(f"Updating Last Name from empty to '{value}'")
-                                                        combined_row['Last Name'] = value
-                                                    else:
-                                                        logger.info(f"Preserving original Last Name: '{original_last_name}' (ignoring '{value}')")
-                                                elif key == 'given_names':
-                                                    parts = value.split()
-                                                    if parts:
-                                                        # Only update if original is empty
-                                                        if not original_first_name:
-                                                            combined_row['First Name'] = parts[0]
-                                                        if len(parts) > 1 and 'Middle Name' in combined_row:
-                                                            combined_row['Middle Name'] = ' '.join(parts[1:])
-                                                # Other fields mapping - THESE ARE FINE
-                                                elif key == 'passport_number':
-                                                    combined_row['Passport No'] = value
-                                                elif key == 'date_of_birth':
-                                                    combined_row['DOB'] = value
-                                                elif key == 'nationality':
-                                                    combined_row['Nationality'] = value
-                                                elif key == 'gender' or key == 'sex':
-                                                    # Standardize gender format
-                                                    if value.upper() in ['M', 'MALE']:
-                                                        combined_row['Gender'] = 'Male'
-                                                    elif value.upper() in ['F', 'FEMALE']:
-                                                        combined_row['Gender'] = 'Female'
-                                                elif key == 'unified_no':
-                                                    combined_row['Unified No'] = value
-                                                elif key == 'visa_file_number' or key == 'entry_permit_no':
-                                                    combined_row['Visa File Number'] = value
-                                
-                                # Verify names after processing
-                                logger.info(f"Final row data after modification: Last Name: '{combined_row.get('Last Name', '')}', First Name: '{combined_row.get('First Name', '')}'")
-                                
-                                matched_rows.append(combined_row)
-                                matched_indices.add(idx)
-                                logger.info(f"Matched row {idx}: {employee_name} to document name: {best_match}")
-                            else:
-                                # Keep row as is if no good match
-                                unmatched_rows.append(row)
-                                logger.info(f"No good match for row {idx}: {employee_name}")
-                        
-                        # Combine matched and unmatched rows
-                        processed_rows = matched_rows + unmatched_rows
-                        
-                        # Only use processed rows if we successfully matched at least one row
-                        if matched_rows:
-                            logger.info(f"Successfully matched {len(matched_rows)} rows out of {len(all_excel_rows)}")
-                            all_excel_rows = processed_rows
-                        else:
-                            logger.warning("No rows successfully matched with documents, using original Excel data")
-                    else:
-                        logger.warning("No names found in documents for matching")
-
-                # Apply document data to all rows if we only have one row or couldn't match
+                    # IMPORTANT: Add this row to processed rows whether it matched or not
+                    processed_rows.append(row_copy)
+                    logger.info(f"Added row {idx} to processed rows. Doc match found: {doc_match_found}")
+                
+                # CRITICAL: Verify we haven't lost any rows
+                if len(processed_rows) != len(all_excel_rows):
+                    logger.error(f"ROW COUNT MISMATCH! Original: {len(all_excel_rows)}, Processed: {len(processed_rows)}")
                 else:
-                    logger.info("Only one Excel row or no matching performed, applying document data directly")
-                    # Combine all document data
-                    combined_doc_data = {}
-                    for doc_data in doc_data_by_type.values():
-                        for key, value in doc_data.items():
-                            if value != self.DEFAULT_VALUE:
-                                combined_doc_data[key] = value
-                    
-                    # Apply to each row
-                    for i, row in enumerate(all_excel_rows):
-                        # Only apply non-name fields to avoid overwriting names
-                        for key, value in combined_doc_data.items():
-                            # Skip name fields
-                            if key not in ['full_name', 'name', 'surname', 'given_names']:
-                                # Apply mappings for other fields
-                                if key == 'passport_number':
-                                    row['Passport No'] = value
-                                elif key == 'date_of_birth':
-                                    row['DOB'] = value
-                                elif key == 'nationality':
-                                    row['Nationality'] = value
-                                elif key == 'gender' or key == 'sex':
-                                    # Standardize gender format
-                                    if value.upper() in ['M', 'MALE']:
-                                        row['Gender'] = 'Male'
-                                    elif value.upper() in ['F', 'FEMALE']:
-                                        row['Gender'] = 'Female'
-                                elif key == 'unified_no':
-                                    row['Unified No'] = value
-                                elif key == 'visa_file_number' or key == 'entry_permit_no':
-                                    row['Visa File Number'] = value
+                    logger.info(f"Row count verified: {len(processed_rows)} rows processed")
+                
+                # Replace original rows with processed ones
+                all_excel_rows = processed_rows
                 
                 # Extract common data for use in other parts of the workflow
                 extracted_data = {}
@@ -1643,6 +1605,178 @@ def run_diagnostics():
     
     print_separator()
     logger.info(f"Diagnostics complete. Check {result.get('diagnostic_dir', 'logs')} for details")
+    
+def _process_large_client_excel(self, excel_path: str, template_path: str, output_path: str) -> Dict:
+    """
+    Special handler for large client Excel files (400+ employees) with custom mapping.
+    
+    Args:
+        excel_path: Path to the client Excel file
+        template_path: Path to the template Excel file
+        output_path: Path for the output Excel file
+        
+    Returns:
+        Dictionary with processing result
+    """
+    try:
+        logger.info(f"Processing large client Excel: {excel_path}")
+        
+        # Read the client Excel file
+        df = pd.read_excel(excel_path)
+        logger.info(f"Read {len(df)} rows from client Excel")
+        
+        # Create a new DataFrame for the template format
+        template_df = pd.DataFrame()
+        
+        # Process each row with custom field mapping
+        for idx, row in df.iterrows():
+            # Create a new row for the template
+            template_row = {}
+            
+            # Custom field mapping
+            # Staff ID
+            if 'StaffNo' in row and pd.notna(row['StaffNo']):
+                template_row['Staff ID'] = str(row['StaffNo']).strip()
+            
+            # Name fields - process according to instructions
+            if 'FirstName' in row and pd.notna(row['FirstName']):
+                full_name = str(row['FirstName']).strip()
+                name_parts = full_name.split()
+                
+                if len(name_parts) >= 3:
+                    # If 3+ words: first=first, middle=second, last=third+
+                    template_row['First Name'] = name_parts[0]
+                    template_row['Middle Name'] = name_parts[1]
+                    template_row['Last Name'] = ' '.join(name_parts[2:])
+                elif len(name_parts) == 2:
+                    # If 2 words: first=first, middle='.', last=second
+                    template_row['First Name'] = name_parts[0]
+                    template_row['Middle Name'] = '.'
+                    template_row['Last Name'] = name_parts[1]
+                elif len(name_parts) == 1:
+                    # If 1 word: first=that word, middle='.', last='.'
+                    template_row['First Name'] = name_parts[0]
+                    template_row['Middle Name'] = '.'
+                    template_row['Last Name'] = '.'
+            
+            # Nationality
+            if 'Country' in row and pd.notna(row['Country']):
+                template_row['Nationality'] = str(row['Country']).strip()
+            
+            # Marital Status
+            if 'MaritalStatus' in row and pd.notna(row['MaritalStatus']):
+                template_row['Marital Status'] = str(row['MaritalStatus']).strip()
+            
+            # Emirates ID
+            if 'EIDNumber' in row and pd.notna(row['EIDNumber']):
+                eid = str(row['EIDNumber']).strip()
+                # Format Emirates ID if needed
+                if eid and '-' not in eid and len(eid.replace(' ', '')) == 15:
+                    digits = eid.replace(' ', '')
+                    eid = f"{digits[:3]}-{digits[3:7]}-{digits[7:14]}-{digits[14]}"
+                template_row['Emirates Id'] = eid
+            
+            # Salary Band
+            if 'Salary' in row and pd.notna(row['Salary']):
+                salary = float(row['Salary'])
+                if salary <= 4000:
+                    template_row['Salary Band'] = 'Below 4000'
+                else:
+                    template_row['Salary Band'] = 'Above 4000'
+            
+            # Email
+            if 'EmailID' in row and pd.notna(row['EmailID']):
+                template_row['Email'] = str(row['EmailID']).strip()
+                
+                # Copy to Company Mail if that field exists in the template
+                if 'Company Mail' in template_df.columns:
+                    template_row['Company Mail'] = str(row['EmailID']).strip()
+            
+            # Passport No
+            if 'PassportNum' in row and pd.notna(row['PassportNum']):
+                template_row['Passport No'] = str(row['PassportNum']).strip()
+            
+            # Unified No
+            if 'UIDNo' in row and pd.notna(row['UIDNo']):
+                template_row['Unified No'] = str(row['UIDNo']).strip()
+            
+            # Visa File Number
+            if 'ResisdentFileNumber' in row and pd.notna(row['ResisdentFileNumber']):
+                visa_file = str(row['ResisdentFileNumber']).strip()
+                template_row['Visa File Number'] = visa_file
+                
+                # Auto-fill emirate fields based on visa file number
+                if visa_file:
+                    digits = ''.join(filter(str.isdigit, visa_file))
+                    
+                    if digits.startswith('10'):  # Abu Dhabi
+                        template_row['Residence Emirate'] = 'Abu Dhabi'
+                        template_row['Work Emirate'] = 'Abu Dhabi'
+                        template_row['Residence Region'] = 'Abu Dhabi - Abu Dhabi'
+                        template_row['Work Region'] = 'Abu Dhabi - Abu Dhabi'
+                        template_row['Visa Issuance Emirate'] = 'Abu Dhabi'
+                        template_row['Member Type'] = 'Expat whose residence issued other than Dubai'
+                    elif digits.startswith('20'):  # Dubai
+                        template_row['Residence Emirate'] = 'Dubai'
+                        template_row['Work Emirate'] = 'Dubai'
+                        template_row['Residence Region'] = 'Dubai - Abu Hail'
+                        template_row['Work Region'] = 'Dubai - Abu Hail'
+                        template_row['Visa Issuance Emirate'] = 'Dubai'
+                        template_row['Member Type'] = 'Expat whose residence issued in Dubai'
+            
+            # Mobile No
+            if 'EntityContactNumber' in row and pd.notna(row['EntityContactNumber']):
+                mobile = str(row['EntityContactNumber']).strip()
+                template_row['Mobile No'] = mobile
+                
+                # Copy to Company Phone if that field exists in the template
+                if 'Company Phone' in template_df.columns:
+                    template_row['Company Phone'] = mobile
+            
+            # Default fields
+            template_row['Commission'] = 'NO'
+            template_row['Effective Date'] = datetime.now().strftime('%d/%m/%Y')
+            
+            # Add other default fields as needed for your template
+            template_row['Category'] = 'Self'
+            template_row['Relation'] = 'Self'
+            template_row['Work Country'] = 'United Arab Emirates'
+            template_row['Residence Country'] = 'United Arab Emirates'
+            
+            # Append to the template DataFrame
+            template_df = pd.concat([template_df, pd.DataFrame([template_row])], ignore_index=True)
+            
+            # Provide progress updates for large files
+            if (idx + 1) % 100 == 0:
+                logger.info(f"Processed {idx + 1}/{len(df)} rows")
+        
+        # Set default values for any missing required fields
+        required_fields = [
+            'First Name', 'Middle Name', 'Last Name', 'Effective Date', 
+            'DOB', 'Gender', 'Marital Status', 'Category', 'Relation', 
+            'Staff ID', 'Nationality'
+        ]
+        
+        for field in required_fields:
+            if field not in template_df.columns:
+                template_df[field] = '.'
+        
+        # Write the result to the output file
+        template_df.to_excel(output_path, index=False)
+        
+        logger.info(f"Successfully processed large client Excel with {len(template_df)} rows")
+        return {
+            "status": "success",
+            "rows_processed": len(template_df),
+            "output_path": output_path
+        }
+    
+    except Exception as e:
+        logger.error(f"Error processing large client Excel: {str(e)}", exc_info=True)
+        return {
+            "status": "error",
+            "error": str(e)
+        }
     
 def force_deduplication(emails, processed_file="processed_emails.json"):
     """Force deduplication by directly checking the file."""
