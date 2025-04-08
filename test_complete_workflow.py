@@ -387,6 +387,7 @@ class WorkflowTester:
                                 f"final_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
                             )
                             
+                            template_path = self._select_template_for_company(subject)
                             result = self._process_large_client_excel(excel_path, template_path, output_path)
                             
                             if result['status'] == 'success':
@@ -543,198 +544,209 @@ class WorkflowTester:
                     except Exception as e:
                         logger.error(f"Error processing {doc_type} document: {str(e)}")
                 
-                # CRITICAL FIX: Process each row individually with its own copy of data
-                processed_rows = []
-                
-                # Create an array for diagnostic information about document matches
-                doc_matches = []
-                
-                # First pass: Extract key identifiers from documents
-                document_identifiers = []
-                for doc_type, doc_data in doc_data_by_type.items():
-                    doc_id = {}
-                    doc_id['type'] = doc_type
-                    
-                    # Get name from document
-                    for name_field in ['full_name', 'name']:
-                        if name_field in doc_data and doc_data[name_field] != self.DEFAULT_VALUE:
-                            doc_id['name'] = doc_data[name_field]
-                            break
-                            
-                    # Get passport number
-                    if 'passport_number' in doc_data and doc_data['passport_number'] != self.DEFAULT_VALUE:
-                        doc_id['passport'] = doc_data['passport_number']
+                # Process each Excel row INDIVIDUALLY with better matching logic
+                all_excel_rows = []
+                doc_data_by_type = {}
+
+                # First extract data from all documents
+                for doc_type, file_path in document_paths.items():
+                    try:
+                        # Process with GPT first if available (prioritize GPT as mentioned)
+                        if self.gpt:
+                            try:
+                                doc_data = self.gpt.process_document(file_path, doc_type)
+                                if doc_data and 'error' not in doc_data:
+                                    doc_data_by_type[doc_type] = doc_data
+                                    logger.info(f"GPT successfully extracted data from {doc_type}")
+                                    continue  # Skip Textract if GPT succeeded
+                            except Exception as e:
+                                logger.warning(f"GPT extraction failed for {doc_type}, using Textract: {str(e)}")
                         
-                    # Get ID number
-                    if 'emirates_id' in doc_data and doc_data['emirates_id'] != self.DEFAULT_VALUE:
-                        doc_id['id'] = doc_data['emirates_id']
+                        # Fallback to Textract
+                        doc_data = self.textract.process_document(file_path, doc_type)
+                        doc_data_by_type[doc_type] = doc_data
+                        logger.info(f"Textract extracted data from {doc_type}")
                         
-                    # Add other identifiers as needed
-                    document_identifiers.append(doc_id)
-                    
-                logger.info(f"Extracted {len(document_identifiers)} document identifiers")
-                
-                # Second pass: Process EACH ROW INDIVIDUALLY
-                for idx, original_row in enumerate(all_excel_rows):
-                    # CRITICAL: Create a NEW deep copy for this row
-                    row_copy = copy.deepcopy(original_row)
-                    
-                    # Log this row's key identifiers for matching
-                    row_passport = str(row_copy.get('Passport No', '')).strip()
-                    row_first_name = str(row_copy.get('First Name', '')).strip()
-                    row_last_name = str(row_copy.get('Last Name', '')).strip()
-                    row_name = f"{row_first_name} {row_last_name}".strip()
-                    row_id = str(row_copy.get('Emirates Id', '')).strip()
-                    
-                    logger.info(f"Processing row {idx+1}/{len(all_excel_rows)}: Name='{row_name}', Passport='{row_passport}', ID='{row_id}'")
-                    
-                    # Track if we found a match for this row
-                    match_found = False
-                    match_doc_type = None
-                    match_score = 0
-                    
-                    # For each row, scan ALL document data to find the best match
-                    for doc_type, doc_data in doc_data_by_type.items():
-                        current_score = 0
-                        
-                        # Check passport number (strongest match)
-                        if 'passport_number' in doc_data and doc_data['passport_number'] != self.DEFAULT_VALUE:
-                            doc_passport = doc_data['passport_number']
-                            if row_passport and doc_passport.lower() == row_passport.lower():
-                                current_score += 100  # Strong passport match
-                                logger.info(f"STRONG MATCH (Passport): Row {idx+1} matches {doc_type}")
-                        
-                        # Check name (medium strength match)
-                        doc_name = None
-                        for name_field in ['full_name', 'name']:
-                            if name_field in doc_data and doc_data[name_field] != self.DEFAULT_VALUE:
-                                doc_name = doc_data[name_field]
-                                break
-                                
-                        if doc_name and row_name:
-                            # Calculate name similarity
-                            doc_words = set(doc_name.lower().split())
-                            row_words = set(row_name.lower().split())
-                            common_words = doc_words.intersection(row_words)
-                            
-                            if common_words:
-                                name_similarity = len(common_words) / max(len(doc_words), len(row_words))
-                                current_score += int(name_similarity * 50)  # Name match score
-                                logger.info(f"NAME MATCH: Row {idx+1} matches {doc_type} with similarity {name_similarity:.2f}")
-                        
-                        # Check Emirates ID (strong match)
-                        if 'emirates_id' in doc_data and doc_data['emirates_id'] != self.DEFAULT_VALUE:
-                            doc_id = doc_data['emirates_id']
-                            if row_id and doc_id.replace('-', '') == row_id.replace('-', ''):
-                                current_score += 100  # Strong ID match
-                                logger.info(f"STRONG MATCH (ID): Row {idx+1} matches {doc_type}")
-                        
-                        # If this document is a better match, save it
-                        if current_score > match_score:
-                            match_score = current_score
-                            match_doc_type = doc_type
-                            match_found = True
-                    
-                    # If we found a match for this row
-                    if match_found and match_score >= 30:  # Threshold for considering a match
-                        logger.info(f"MATCH FOUND: Row {idx+1} matches document {match_doc_type} (score: {match_score})")
-                        
-                        # Apply the matched document data to this row
-                        matched_data = doc_data_by_type[match_doc_type]
-                        
-                        # Add to match diagnostics
-                        doc_matches.append({
-                            'row_idx': idx,
-                            'row_name': row_name,
-                            'doc_type': match_doc_type,
-                            'score': match_score,
-                            'matched_fields': []
-                        })
-                        
-                        # Apply document data fields to this row
-                        for key, value in matched_data.items():
-                            if value != self.DEFAULT_VALUE:
-                                # Skip name fields - maintain Excel names
-                                if key in ['full_name', 'name', 'surname', 'given_names']:
-                                    continue
-                                    
-                                # Apply field mappings
-                                if key == 'passport_number':
-                                    row_copy['Passport No'] = value
-                                    doc_matches[-1]['matched_fields'].append(f"Passport: {value}")
-                                elif key == 'date_of_birth':
-                                    row_copy['DOB'] = value
-                                    doc_matches[-1]['matched_fields'].append(f"DOB: {value}")
-                                elif key == 'nationality':
-                                    row_copy['Nationality'] = value
-                                    doc_matches[-1]['matched_fields'].append(f"Nationality: {value}")
-                                elif key == 'gender' or key == 'sex':
-                                    if value.upper() in ['M', 'MALE']:
-                                        row_copy['Gender'] = 'Male'
-                                    elif value.upper() in ['F', 'FEMALE']:
-                                        row_copy['Gender'] = 'Female'
-                                    doc_matches[-1]['matched_fields'].append(f"Gender: {row_copy['Gender']}")
-                                elif key == 'emirates_id':
-                                    row_copy['Emirates Id'] = value
-                                    doc_matches[-1]['matched_fields'].append(f"Emirates Id: {value}")
-                                elif key == 'unified_no':
-                                    row_copy['Unified No'] = value
-                                    doc_matches[-1]['matched_fields'].append(f"Unified No: {value}")
-                                elif key == 'visa_file_number' or key == 'entry_permit_no':
-                                    row_copy['Visa File Number'] = value
-                                    doc_matches[-1]['matched_fields'].append(f"Visa File: {value}")
-                                elif key == 'mobile_no' or key == 'mobile':
-                                    row_copy['Mobile No'] = value
-                                    
-                                    # Only copy to Company Phone if it's empty
-                                    if ('Company Phone' not in row_copy or 
-                                        not row_copy['Company Phone'] or 
-                                        row_copy['Company Phone'] == self.DEFAULT_VALUE or
-                                        str(row_copy['Company Phone']).strip() == ''):
-                                        row_copy['Company Phone'] = value
-                                        
-                                    doc_matches[-1]['matched_fields'].append(f"Mobile: {value}")
-                                elif key == 'email':
-                                    row_copy['Email'] = value
-                                    
-                                    # Only copy to Company Mail if it's empty
-                                    if ('Company Mail' not in row_copy or 
-                                        not row_copy['Company Mail'] or 
-                                        row_copy['Company Mail'] == self.DEFAULT_VALUE or
-                                        str(row_copy['Company Mail']).strip() == ''):
-                                        row_copy['Company Mail'] = value
-                                        
-                                    doc_matches[-1]['matched_fields'].append(f"Email: {value}")
-                    else:
-                        logger.info(f"NO MATCH FOUND for row {idx+1} - Using original Excel data only")
-                    
-                    # Add this row's copy to the processed rows
-                    processed_rows.append(row_copy)
-                
-                # VERIFY we have the same number of rows
-                if len(processed_rows) != len(all_excel_rows):
-                    logger.error(f"ROW COUNT MISMATCH! Original: {len(all_excel_rows)}, Processed: {len(processed_rows)}")
-                    # If count mismatch, fall back to original rows to be safe
-                    all_excel_rows = [copy.deepcopy(row) for row in all_excel_rows]
-                else:
-                    # Replace with properly processed rows
-                    all_excel_rows = processed_rows
-                    logger.info(f"Successfully processed all {len(processed_rows)} rows")
-                
-                # Save match diagnostics for debugging
-                try:
-                    with open('document_matches.json', 'w') as f:
-                        json.dump(doc_matches, f, indent=2, default=str)
-                    logger.info(f"Saved document matching diagnostics to document_matches.json")
-                except:
-                    logger.warning("Failed to save document matching diagnostics")
-                    
-                # Extract common data for other parts of the workflow
+                    except Exception as e:
+                        logger.error(f"Error processing {doc_type} document: {str(e)}")
+
+                # Combine all document data into one dictionary for template population
                 extracted_data = {}
                 for doc_data in doc_data_by_type.values():
                     for key, value in doc_data.items():
-                        if value != self.DEFAULT_VALUE:
+                        if key not in extracted_data or (value != self.DEFAULT_VALUE and extracted_data[key] == self.DEFAULT_VALUE):
                             extracted_data[key] = value
+
+                # Process each Excel row with individual document matching
+                for excel_file in excel_files:
+                    try:
+                        df, errors = self.excel_processor.process_excel(excel_file, dayfirst=True)
+                        if not df.empty:
+                            # Create document matching diagnostics
+                            self._log_document_matches(document_paths, df.to_dict('records'), doc_data_by_type)
+                            
+                            # Process each row individually
+                            for _, row in df.iterrows():
+                                # Create a deep copy of row to prevent reference issues
+                                row_dict = copy.deepcopy(row.to_dict())
+                                
+                                # Check if we need to split names
+                                if 'First Name' in row_dict and row_dict['First Name']:
+                                    full_name = str(row_dict['First Name']).strip()
+                                    name_parts = full_name.split()
+                                    
+                                    if len(name_parts) >= 3:
+                                        # First word = first name, second = middle, third+ = last
+                                        first_name = name_parts[0]
+                                        middle_name = name_parts[1]
+                                        last_name = ' '.join(name_parts[2:])
+                                        
+                                        row_dict['First Name'] = first_name
+                                        row_dict['Middle Name'] = middle_name
+                                        row_dict['Last Name'] = last_name
+                                        
+                                        logger.info(f"Split name '{full_name}' into First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
+                                    elif len(name_parts) == 2:
+                                        # First word = first name, '.' = middle, second = last
+                                        first_name = name_parts[0]
+                                        middle_name = '.'
+                                        last_name = name_parts[1]
+                                        
+                                        row_dict['First Name'] = first_name
+                                        row_dict['Middle Name'] = middle_name
+                                        row_dict['Last Name'] = last_name
+                                        
+                                        logger.info(f"Split name '{full_name}' into First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
+                                
+                                # Find best matching document for this row
+                                best_match_doc_type = None
+                                best_match_score = 0
+                                match_reason = []
+                                
+                                # Extract row identifiers for matching
+                                row_passport = None
+                                row_emirates_id = None
+                                row_name = None
+                                
+                                for field in ['Passport No', 'passport_no']:
+                                    if field in row_dict and row_dict[field] and str(row_dict[field]).strip() != '':
+                                        row_passport = str(row_dict[field]).strip()
+                                        break
+                                        
+                                for field in ['Emirates Id', 'emirates_id']:
+                                    if field in row_dict and row_dict[field] and str(row_dict[field]).strip() != '':
+                                        row_emirates_id = str(row_dict[field]).strip()
+                                        break
+                                        
+                                first_name = str(row_dict.get('First Name', '')).strip()
+                                last_name = str(row_dict.get('Last Name', '')).strip()
+                                if first_name or last_name:
+                                    row_name = f"{first_name} {last_name}".strip()
+                                
+                                # Match with each document
+                                for doc_type, doc_data in doc_data_by_type.items():
+                                    current_score = 0
+                                    current_reason = []
+                                    
+                                    # Get document identifiers
+                                    doc_passport = None
+                                    doc_emirates_id = None
+                                    doc_name = None
+                                    
+                                    for field in ['passport_number', 'passport_no']:
+                                        if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
+                                            doc_passport = doc_data[field]
+                                            break
+                                            
+                                    for field in ['emirates_id', 'eid']:
+                                        if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
+                                            doc_emirates_id = doc_data[field]
+                                            break
+                                            
+                                    for field in ['full_name', 'name']:
+                                        if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
+                                            doc_name = doc_data[field]
+                                            break
+                                    
+                                    # Check passport match (strong)
+                                    if doc_passport and row_passport:
+                                        if doc_passport.lower() == row_passport.lower():
+                                            current_score += 100
+                                            current_reason.append(f"Passport match: {doc_passport}")
+                                    
+                                    # Check Emirates ID match (strong)
+                                    if doc_emirates_id and row_emirates_id:
+                                        # Clean IDs for comparison
+                                        clean_doc_id = re.sub(r'[^0-9]', '', str(doc_emirates_id))
+                                        clean_row_id = re.sub(r'[^0-9]', '', str(row_emirates_id))
+                                        
+                                        if clean_doc_id == clean_row_id:
+                                            current_score += 100
+                                            current_reason.append(f"Emirates ID match: {doc_emirates_id}")
+                                    
+                                    # Check name similarity (medium)
+                                    if doc_name and row_name:
+                                        doc_words = set(doc_name.lower().split())
+                                        row_words = set(row_name.lower().split())
+                                        common_words = doc_words.intersection(row_words)
+                                        
+                                        if common_words:
+                                            similarity = len(common_words) / max(len(doc_words), len(row_words))
+                                            name_score = int(similarity * 50)
+                                            current_score += name_score
+                                            current_reason.append(f"Name similarity: {similarity:.2f}")
+                                    
+                                    # Update best match if better score
+                                    if current_score > best_match_score:
+                                        best_match_score = current_score
+                                        best_match_doc_type = doc_type
+                                        match_reason = current_reason
+                                
+                                # Apply document data if good match found
+                                if best_match_doc_type and best_match_score >= 50:
+                                    logger.info(f"Row match found: {row_name} matches {best_match_doc_type} (score: {best_match_score})")
+                                    for reason in match_reason:
+                                        logger.info(f"  - {reason}")
+                                        
+                                    # Apply document fields to row
+                                    doc_data = doc_data_by_type[best_match_doc_type]
+                                    
+                                    # Apply key fields from document
+                                    field_mapping = {
+                                        'passport_number': 'Passport No',
+                                        'emirates_id': 'Emirates Id',
+                                        'unified_no': 'Unified No',
+                                        'visa_file_number': 'Visa File Number',
+                                        'nationality': 'Nationality',
+                                        'date_of_birth': 'DOB',
+                                        'gender': 'Gender',
+                                        'mobile_no': 'Mobile No',
+                                        'email': 'Email'
+                                    }
+                                    
+                                    for doc_field, row_field in field_mapping.items():
+                                        if doc_field in doc_data and doc_data[doc_field] != self.DEFAULT_VALUE:
+                                            # Special handling for gender
+                                            if doc_field == 'gender':
+                                                gender_val = doc_data[doc_field].upper()
+                                                if gender_val in ['M', 'MALE']:
+                                                    row_dict[row_field] = 'Male'
+                                                elif gender_val in ['F', 'FEMALE']:
+                                                    row_dict[row_field] = 'Female'
+                                            else:
+                                                row_dict[row_field] = doc_data[doc_field]
+                                else:
+                                    logger.info(f"No document match for row with name: {row_name}")
+                                
+                                all_excel_rows.append(row_dict)
+                            
+                            logger.info(f"Processed {len(df)} rows from Excel file")
+                        
+                        if errors:
+                            logger.warning(f"Excel validation errors: {errors}")
+                            
+                    except Exception as e:
+                        logger.error(f"Error processing Excel file {excel_file}: {str(e)}", exc_info=True)
 
 
             # Rename client files based on Excel data
@@ -1437,6 +1449,448 @@ class WorkflowTester:
                     combined['Occupation'] = value
         
         return combined
+    
+    def _process_large_client_excel(self, excel_path: str, template_path: str, output_path: str) -> Dict:
+        """
+        Special handler for large client Excel files (400+ employees) with custom mapping.
+        
+        Args:
+            excel_path: Path to the client Excel file
+            template_path: Path to the template Excel file
+            output_path: Path for the output Excel file
+            
+        Returns:
+            Dictionary with processing result
+        """
+        try:
+            logger.info(f"Processing large client Excel: {excel_path}")
+            
+            # Read the client Excel file
+            df = pd.read_excel(excel_path)
+            logger.info(f"Read {len(df)} rows from client Excel")
+            
+            # Read the template to understand required columns
+            template_df = pd.read_excel(template_path)
+            template_columns = template_df.columns.tolist()
+            logger.info(f"Template has {len(template_columns)} columns")
+            
+            # Create a new DataFrame for the template format
+            result_df = pd.DataFrame(columns=template_columns)
+            
+            # Determine which template we're using
+            template_name = os.path.basename(template_path).lower()
+            is_nas = 'nas' in template_name
+            is_almadallah = 'madallah' in template_name
+            
+            logger.info(f"Using {'NAS' if is_nas else 'Al Madallah' if is_almadallah else 'Unknown'} template")
+            
+            # Process each row with custom field mapping
+            for idx, row in df.iterrows():
+                # Create a new row for the template
+                template_row = {}
+                
+                # Fill in with default values first
+                for col in template_columns:
+                    template_row[col] = ""  # Empty string as default
+                
+                # NAS Template specific mappings
+                if is_nas:
+                    # Common field mapping for NAS template
+                    field_mapping = {
+                        'StaffNo': 'Staff ID',
+                        'FirstName': None,  # Special handling below
+                        'Country': 'Nationality',
+                        'MaritalStatus': 'Marital Status',
+                        'EIDNumber': 'Emirates Id',
+                        'Salary': None,  # Special handling below
+                        'EmailID': 'Email',
+                        'PassportNum': 'Passport No',
+                        'UIDNo': 'Unified No',
+                        'ResisdentFileNumber': 'Visa File Number',
+                        'EntityContactNumber': 'Mobile No',
+                        'Department': 'Department',
+                        'Gender': 'Gender',
+                        'PassportExpDate': 'Passport Expiry Date',
+                        'VisaExpDate': 'Visa Expiry Date'
+                    }
+                    
+                    # Apply direct mappings
+                    for client_field, nas_field in field_mapping.items():
+                        if client_field in row and pd.notna(row[client_field]) and nas_field:
+                            template_row[nas_field] = str(row[client_field]).strip()
+                    
+                    # Handle name fields with special logic
+                    if 'FirstName' in row and pd.notna(row['FirstName']):
+                        full_name = str(row['FirstName']).strip()
+                        name_parts = full_name.split()
+                        
+                        if len(name_parts) >= 3:
+                            # If 3+ words: first=first, middle=second, last=third+
+                            template_row['First Name'] = name_parts[0]
+                            template_row['Middle Name'] = name_parts[1]
+                            template_row['Last Name'] = ' '.join(name_parts[2:])
+                        elif len(name_parts) == 2:
+                            # If 2 words: first=first, middle='.', last=second
+                            template_row['First Name'] = name_parts[0]
+                            template_row['Middle Name'] = '.'
+                            template_row['Last Name'] = name_parts[1]
+                        elif len(name_parts) == 1:
+                            # If 1 word: first=that word, middle='.', last='.'
+                            template_row['First Name'] = name_parts[0]
+                            template_row['Middle Name'] = '.'
+                            template_row['Last Name'] = '.'
+                            
+                    # Staff ID and Family No correlation
+                    if 'Staff ID' in template_row and template_row['Staff ID']:
+                        template_row['Family No.'] = template_row['Staff ID']
+                    
+                    # Salary Band determination
+                    if 'Salary' in row and pd.notna(row['Salary']):
+                        salary = float(row['Salary'])
+                        if salary <= 4000:
+                            template_row['Salary Band'] = 'Below 4000'
+                        else:
+                            template_row['Salary Band'] = 'Above 4000'
+                    else:
+                        # Default salary band
+                        template_row['Salary Band'] = 'Above 4000'
+                        
+                    # Handle Gender standardization
+                    if 'Gender' in template_row:
+                        gender = template_row['Gender'].upper()
+                        if gender in ['M', 'MALE']:
+                            template_row['Gender'] = 'Male'
+                        elif gender in ['F', 'FEMALE']:
+                            template_row['Gender'] = 'Female'
+                    
+                    # Handle Emirates ID formatting
+                    if 'Emirates Id' in template_row and template_row['Emirates Id']:
+                        eid = template_row['Emirates Id']
+                        # Format Emirates ID if needed
+                        if '-' not in eid and len(eid.replace(' ', '')) == 15:
+                            digits = eid.replace(' ', '')
+                            template_row['Emirates Id'] = f"{digits[:3]}-{digits[3:7]}-{digits[7:14]}-{digits[14]}"
+                    
+                    # Handle Company Phone and Company Mail
+                    if 'Mobile No' in template_row and template_row['Mobile No']:
+                        template_row['Company Phone'] = template_row['Mobile No']
+                    
+                    if 'Email' in template_row and template_row['Email']:
+                        template_row['Company Mail'] = template_row['Email']
+                    
+                # Al Madallah Template specific mappings
+                elif is_almadallah:
+                    # Common field mapping for Al Madallah template
+                    field_mapping = {
+                        'StaffNo': 'Employee ID',
+                        'FirstName': None,  # Special handling below
+                        'Country': 'Nationality',
+                        'EIDNumber': 'Emirates Id',
+                        'PassportNum': 'Passport No',
+                        'UIDNo': 'Unified No',
+                        'ResisdentFileNumber': 'Visa File Number',
+                        'EntityContactNumber': 'MOBILE',
+                        'EmailID': 'EMAIL',
+                        'Department': 'Subgroup Name',
+                        'PassportExpDate': None,  # Not directly mapped
+                        'Designation': 'RANK'
+                    }
+                    
+                    # Apply direct mappings
+                    for client_field, almadallah_field in field_mapping.items():
+                        if client_field in row and pd.notna(row[client_field]) and almadallah_field:
+                            template_row[almadallah_field] = str(row[client_field]).strip()
+                    
+                    # Almadallah specific fields
+                    template_row['POLICYCATEGORY'] = 'Standard'
+                    template_row['ESTABLISHMENTTYPE'] = 'Establishment'
+                    template_row['Commission'] = 'NO'
+                    template_row['COMPANYPHONENUMBER'] = template_row.get('MOBILE', '')
+                    template_row['COMPANYEMAILID'] = template_row.get('EMAIL', '')
+                    template_row['LANDLINENO'] = template_row.get('MOBILE', '')
+                    template_row['VIP'] = 'NO'
+                    template_row['WPDAYS'] = '0'
+                    
+                    # Set Subgroup Name if empty
+                    if not template_row.get('Subgroup Name'):
+                        template_row['Subgroup Name'] = 'GENERAL'
+                    
+                    # Set Salary Band
+                    if 'Salary' in row and pd.notna(row['Salary']):
+                        salary = float(row['Salary'])
+                        if salary <= 4000:
+                            template_row['Salary Band'] = 'Below 4000'
+                        else:
+                            template_row['Salary Band'] = 'Above 4000'
+                    else:
+                        # Default salary band
+                        template_row['Salary Band'] = 'Above 4000'
+                
+                # Common fields for both templates
+                
+                # Set Effective Date (today's date)
+                effective_date_field = 'Effective Date'
+                template_row[effective_date_field] = datetime.now().strftime('%d/%m/%Y')
+                
+                # Set Commission
+                template_row['Commission'] = 'NO'
+                
+                # Set default country values
+                if 'Work Country' in template_columns:
+                    template_row['Work Country'] = 'United Arab Emirates'
+                if 'Residence Country' in template_columns:
+                    template_row['Residence Country'] = 'United Arab Emirates'
+                    
+                # Handle visa region and member type based on visa file number
+                if 'Visa File Number' in template_row and template_row['Visa File Number']:
+                    visa_file = template_row['Visa File Number']
+                    digits = ''.join(filter(str.isdigit, visa_file))
+                    
+                    # Set emirate-specific fields
+                    emirate_fields = {
+                        'Work Emirate': '',
+                        'Residence Emirate': '',
+                        'Work Region': '',
+                        'Residence Region': '',
+                        'Visa Issuance Emirate': '',
+                        'Member Type': ''
+                    }
+                    
+                    # Only set fields that exist in the template
+                    emirate_fields = {k: v for k, v in emirate_fields.items() if k in template_columns}
+                    
+                    if digits.startswith('10'):  # Abu Dhabi
+                        for field in emirate_fields:
+                            if field == 'Work Emirate' or field == 'Residence Emirate' or field == 'Visa Issuance Emirate':
+                                emirate_fields[field] = 'Abu Dhabi'
+                            elif field == 'Work Region' or field == 'Residence Region':
+                                emirate_fields[field] = 'Abu Dhabi - Abu Dhabi' if is_nas else 'Al Ain City'
+                            elif field == 'Member Type':
+                                emirate_fields[field] = 'Expat whose residence issued other than Dubai'
+                    elif digits.startswith('20'):  # Dubai
+                        for field in emirate_fields:
+                            if field == 'Work Emirate' or field == 'Residence Emirate' or field == 'Visa Issuance Emirate':
+                                emirate_fields[field] = 'Dubai'
+                            elif field == 'Work Region' or field == 'Residence Region':
+                                emirate_fields[field] = 'Dubai - Abu Hail' if is_nas else 'DUBAI (DISTRICT UNKNOWN)'
+                            elif field == 'Member Type':
+                                emirate_fields[field] = 'Expat whose residence issued in Dubai'
+                    
+                    # Apply emirate fields to template row
+                    for field, value in emirate_fields.items():
+                        if value:  # Only set non-empty values
+                            template_row[field] = value
+                
+                # Set default Member Type if not already set
+                if 'Member Type' in template_columns and not template_row.get('Member Type'):
+                    template_row['Member Type'] = 'Expat whose residence issued in Dubai'
+                
+                # Set Category and Relation defaults for NAS
+                if is_nas:
+                    if 'Category' in template_columns and not template_row.get('Category'):
+                        template_row['Category'] = 'Self'
+                    if 'Relation' in template_columns and not template_row.get('Relation'):
+                        template_row['Relation'] = 'Self'
+                
+                # Set Middle Name to '.' if empty (NAS specific)
+                if is_nas and 'Middle Name' in template_columns and not template_row.get('Middle Name'):
+                    template_row['Middle Name'] = '.'
+                    
+                # Add row to result DataFrame
+                result_df = pd.concat([result_df, pd.DataFrame([template_row])], ignore_index=True)
+                
+                # Provide progress updates for large files
+                if (idx + 1) % 100 == 0 or idx == len(df) - 1:
+                    logger.info(f"Processed {idx + 1}/{len(df)} rows")
+            
+            # Write the result to the output file
+            result_df.to_excel(output_path, index=False)
+            
+            logger.info(f"Successfully processed large client Excel with {len(result_df)} rows")
+            return {
+                "status": "success",
+                "rows_processed": len(result_df),
+                "output_path": output_path
+            }
+        
+        except Exception as e:
+            logger.error(f"Error processing large client Excel: {str(e)}", exc_info=True)
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+            
+            
+    def _log_document_matches(self, document_paths, excel_data, extracted_data_by_document):
+        """
+        Create detailed debug logs for document to employee matching.
+        
+        Args:
+            document_paths: Dict of document paths by type
+            excel_data: List of dictionaries with Excel data
+            extracted_data_by_document: Dict of extracted data by document type
+        
+        Returns:
+            Dict with matching statistics
+        """
+        logger.info("=" * 80)
+        logger.info("DOCUMENT MATCHING DIAGNOSTICS")
+        logger.info("=" * 80)
+        
+        # Create diagnostic info
+        diagnostics = {
+            "documents": [],
+            "excel_rows": [],
+            "matches": []
+        }
+        
+        # Document information
+        for doc_type, file_path in document_paths.items():
+            doc_info = {
+                "type": doc_type,
+                "file_path": file_path,
+                "key_identifiers": {}
+            }
+            
+            # Extract key identifiers from document
+            doc_data = extracted_data_by_document.get(doc_type, {})
+            
+            # Document name
+            for name_field in ['full_name', 'name']:
+                if name_field in doc_data and doc_data[name_field] != self.DEFAULT_VALUE:
+                    doc_info["key_identifiers"]["name"] = doc_data[name_field]
+                    break
+                    
+            # Passport number
+            for field in ['passport_number', 'passport_no']:
+                if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
+                    doc_info["key_identifiers"]["passport"] = doc_data[field]
+                    break
+                    
+            # Emirates ID
+            for field in ['emirates_id', 'eid']:
+                if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
+                    doc_info["key_identifiers"]["emirates_id"] = doc_data[field]
+                    break
+            
+            # Log document info
+            logger.info(f"Document: {doc_type} - {os.path.basename(file_path)}")
+            for id_type, value in doc_info["key_identifiers"].items():
+                logger.info(f"  - {id_type}: {value}")
+                
+            diagnostics["documents"].append(doc_info)
+        
+        # Excel row information
+        for idx, row in enumerate(excel_data):
+            row_info = {
+                "row_index": idx,
+                "key_identifiers": {}
+            }
+            
+            # Row name
+            first_name = str(row.get('First Name', '')).strip()
+            last_name = str(row.get('Last Name', '')).strip()
+            row_name = f"{first_name} {last_name}".strip()
+            if row_name:
+                row_info["key_identifiers"]["name"] = row_name
+                
+            # Passport number
+            for field in ['passport_no', 'Passport No', 'PassportNo']:
+                if field in row and row[field] and row[field] != self.DEFAULT_VALUE:
+                    row_info["key_identifiers"]["passport"] = str(row[field]).strip()
+                    break
+                    
+            # Emirates ID
+            for field in ['emirates_id', 'Emirates Id', 'EID']:
+                if field in row and row[field] and row[field] != self.DEFAULT_VALUE:
+                    row_info["key_identifiers"]["emirates_id"] = str(row[field]).strip()
+                    break
+            
+            # Log row info
+            logger.info(f"Excel Row {idx+1}:")
+            for id_type, value in row_info["key_identifiers"].items():
+                logger.info(f"  - {id_type}: {value}")
+                
+            diagnostics["excel_rows"].append(row_info)
+        
+        # Calculate potential matches
+        for doc_idx, doc in enumerate(diagnostics["documents"]):
+            for row_idx, row in enumerate(diagnostics["excel_rows"]):
+                match_score = 0
+                match_reasons = []
+                
+                # Name matching
+                doc_name = doc["key_identifiers"].get("name")
+                row_name = row["key_identifiers"].get("name")
+                
+                if doc_name and row_name:
+                    # Calculate name similarity
+                    doc_words = set(doc_name.lower().split())
+                    row_words = set(row_name.lower().split())
+                    
+                    # Find common words
+                    common_words = doc_words.intersection(row_words)
+                    
+                    if common_words:
+                        # Calculate similarity percentage
+                        similarity = len(common_words) / max(len(doc_words), len(row_words))
+                        name_score = int(similarity * 50)  # Max 50 points for name matching
+                        match_score += name_score
+                        match_reasons.append(f"Name similarity: {similarity:.2f} ({', '.join(common_words)})")
+                
+                # Passport matching
+                doc_passport = doc["key_identifiers"].get("passport")
+                row_passport = row["key_identifiers"].get("passport")
+                
+                if doc_passport and row_passport:
+                    if doc_passport.lower() == row_passport.lower():
+                        match_score += 100
+                        match_reasons.append(f"Passport match: {doc_passport}")
+                
+                # Emirates ID matching
+                doc_eid = doc["key_identifiers"].get("emirates_id")
+                row_eid = row["key_identifiers"].get("emirates_id")
+                
+                if doc_eid and row_eid:
+                    # Clean both for comparison (remove spaces, hyphens)
+                    clean_doc_id = re.sub(r'[^0-9]', '', str(doc_eid))
+                    clean_row_id = re.sub(r'[^0-9]', '', str(row_eid))
+                    
+                    if clean_doc_id == clean_row_id:
+                        match_score += 100
+                        match_reasons.append(f"Emirates ID match: {doc_eid}")
+                
+                # Record match if score is high enough
+                if match_score >= 50:  # Threshold for considering a match
+                    match_info = {
+                        "document_index": doc_idx,
+                        "document_type": doc["type"],
+                        "row_index": row_idx,
+                        "score": match_score,
+                        "reasons": match_reasons
+                    }
+                    
+                    logger.info(f"MATCH: Document {doc['type']} with Row {row_idx+1}")
+                    logger.info(f"  - Score: {match_score}")
+                    for reason in match_reasons:
+                        logger.info(f"  - {reason}")
+                        
+                    diagnostics["matches"].append(match_info)
+        
+        # Save diagnostics to file
+        try:
+            with open('document_matches.json', 'w') as f:
+                json.dump(diagnostics, f, indent=2, default=str)
+            logger.info(f"Saved document matching diagnostics to document_matches.json")
+        except Exception as e:
+            logger.error(f"Error saving document matching diagnostics: {str(e)}")
+        
+        # Summary
+        logger.info("=" * 80)
+        logger.info(f"MATCHING SUMMARY: {len(diagnostics['matches'])} matches found")
+        logger.info("=" * 80)
+        
+        return diagnostics
 
 # Configure logging
 logging.basicConfig(
@@ -1686,177 +2140,6 @@ def run_diagnostics():
     print_separator()
     logger.info(f"Diagnostics complete. Check {result.get('diagnostic_dir', 'logs')} for details")
     
-def _process_large_client_excel(self, excel_path: str, template_path: str, output_path: str) -> Dict:
-    """
-    Special handler for large client Excel files (400+ employees) with custom mapping.
-    
-    Args:
-        excel_path: Path to the client Excel file
-        template_path: Path to the template Excel file
-        output_path: Path for the output Excel file
-        
-    Returns:
-        Dictionary with processing result
-    """
-    try:
-        logger.info(f"Processing large client Excel: {excel_path}")
-        
-        # Read the client Excel file
-        df = pd.read_excel(excel_path)
-        logger.info(f"Read {len(df)} rows from client Excel")
-        
-        # Create a new DataFrame for the template format
-        template_df = pd.DataFrame()
-        
-        # Process each row with custom field mapping
-        for idx, row in df.iterrows():
-            # Create a new row for the template
-            template_row = {}
-            
-            # Custom field mapping
-            # Staff ID
-            if 'StaffNo' in row and pd.notna(row['StaffNo']):
-                template_row['Staff ID'] = str(row['StaffNo']).strip()
-            
-            # Name fields - process according to instructions
-            if 'FirstName' in row and pd.notna(row['FirstName']):
-                full_name = str(row['FirstName']).strip()
-                name_parts = full_name.split()
-                
-                if len(name_parts) >= 3:
-                    # If 3+ words: first=first, middle=second, last=third+
-                    template_row['First Name'] = name_parts[0]
-                    template_row['Middle Name'] = name_parts[1]
-                    template_row['Last Name'] = ' '.join(name_parts[2:])
-                elif len(name_parts) == 2:
-                    # If 2 words: first=first, middle='.', last=second
-                    template_row['First Name'] = name_parts[0]
-                    template_row['Middle Name'] = '.'
-                    template_row['Last Name'] = name_parts[1]
-                elif len(name_parts) == 1:
-                    # If 1 word: first=that word, middle='.', last='.'
-                    template_row['First Name'] = name_parts[0]
-                    template_row['Middle Name'] = '.'
-                    template_row['Last Name'] = '.'
-            
-            # Nationality
-            if 'Country' in row and pd.notna(row['Country']):
-                template_row['Nationality'] = str(row['Country']).strip()
-            
-            # Marital Status
-            if 'MaritalStatus' in row and pd.notna(row['MaritalStatus']):
-                template_row['Marital Status'] = str(row['MaritalStatus']).strip()
-            
-            # Emirates ID
-            if 'EIDNumber' in row and pd.notna(row['EIDNumber']):
-                eid = str(row['EIDNumber']).strip()
-                # Format Emirates ID if needed
-                if eid and '-' not in eid and len(eid.replace(' ', '')) == 15:
-                    digits = eid.replace(' ', '')
-                    eid = f"{digits[:3]}-{digits[3:7]}-{digits[7:14]}-{digits[14]}"
-                template_row['Emirates Id'] = eid
-            
-            # Salary Band
-            if 'Salary' in row and pd.notna(row['Salary']):
-                salary = float(row['Salary'])
-                if salary <= 4000:
-                    template_row['Salary Band'] = 'Below 4000'
-                else:
-                    template_row['Salary Band'] = 'Above 4000'
-            
-            # Email
-            if 'EmailID' in row and pd.notna(row['EmailID']):
-                template_row['Email'] = str(row['EmailID']).strip()
-                
-                # Copy to Company Mail if that field exists in the template
-                if 'Company Mail' in template_df.columns:
-                    template_row['Company Mail'] = str(row['EmailID']).strip()
-            
-            # Passport No
-            if 'PassportNum' in row and pd.notna(row['PassportNum']):
-                template_row['Passport No'] = str(row['PassportNum']).strip()
-            
-            # Unified No
-            if 'UIDNo' in row and pd.notna(row['UIDNo']):
-                template_row['Unified No'] = str(row['UIDNo']).strip()
-            
-            # Visa File Number
-            if 'ResisdentFileNumber' in row and pd.notna(row['ResisdentFileNumber']):
-                visa_file = str(row['ResisdentFileNumber']).strip()
-                template_row['Visa File Number'] = visa_file
-                
-                # Auto-fill emirate fields based on visa file number
-                if visa_file:
-                    digits = ''.join(filter(str.isdigit, visa_file))
-                    
-                    if digits.startswith('10'):  # Abu Dhabi
-                        template_row['Residence Emirate'] = 'Abu Dhabi'
-                        template_row['Work Emirate'] = 'Abu Dhabi'
-                        template_row['Residence Region'] = 'Abu Dhabi - Abu Dhabi'
-                        template_row['Work Region'] = 'Abu Dhabi - Abu Dhabi'
-                        template_row['Visa Issuance Emirate'] = 'Abu Dhabi'
-                        template_row['Member Type'] = 'Expat whose residence issued other than Dubai'
-                    elif digits.startswith('20'):  # Dubai
-                        template_row['Residence Emirate'] = 'Dubai'
-                        template_row['Work Emirate'] = 'Dubai'
-                        template_row['Residence Region'] = 'Dubai - Abu Hail'
-                        template_row['Work Region'] = 'Dubai - Abu Hail'
-                        template_row['Visa Issuance Emirate'] = 'Dubai'
-                        template_row['Member Type'] = 'Expat whose residence issued in Dubai'
-            
-            # Mobile No
-            if 'EntityContactNumber' in row and pd.notna(row['EntityContactNumber']):
-                mobile = str(row['EntityContactNumber']).strip()
-                template_row['Mobile No'] = mobile
-                
-                # Copy to Company Phone if that field exists in the template
-                if 'Company Phone' in template_df.columns:
-                    template_row['Company Phone'] = mobile
-            
-            # Default fields
-            template_row['Commission'] = 'NO'
-            template_row['Effective Date'] = datetime.now().strftime('%d/%m/%Y')
-            
-            # Add other default fields as needed for your template
-            template_row['Category'] = 'Self'
-            template_row['Relation'] = 'Self'
-            template_row['Work Country'] = 'United Arab Emirates'
-            template_row['Residence Country'] = 'United Arab Emirates'
-            
-            # Append to the template DataFrame
-            template_df = pd.concat([template_df, pd.DataFrame([template_row])], ignore_index=True)
-            
-            # Provide progress updates for large files
-            if (idx + 1) % 100 == 0:
-                logger.info(f"Processed {idx + 1}/{len(df)} rows")
-        
-        # Set default values for any missing required fields
-        required_fields = [
-            'First Name', 'Middle Name', 'Last Name', 'Effective Date', 
-            'DOB', 'Gender', 'Marital Status', 'Category', 'Relation', 
-            'Staff ID', 'Nationality'
-        ]
-        
-        for field in required_fields:
-            if field not in template_df.columns:
-                template_df[field] = '.'
-        
-        # Write the result to the output file
-        template_df.to_excel(output_path, index=False)
-        
-        logger.info(f"Successfully processed large client Excel with {len(template_df)} rows")
-        return {
-            "status": "success",
-            "rows_processed": len(template_df),
-            "output_path": output_path
-        }
-    
-    except Exception as e:
-        logger.error(f"Error processing large client Excel: {str(e)}", exc_info=True)
-        return {
-            "status": "error",
-            "error": str(e)
-        }
     
 def force_deduplication(emails, processed_file="processed_emails.json"):
     """Force deduplication by directly checking the file."""

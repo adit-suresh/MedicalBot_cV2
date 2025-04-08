@@ -363,83 +363,151 @@ class DataCombiner:
         
         # Extract name from documents to match with rows if needed
         extracted_name = None
+        extracted_passport = None
+        extracted_emirates_id = None
+        
+        # Get key identifiers from document data for matching
+        # First check for name
         for field in ['name', 'full_name']:
             if field in cleaned_extracted and cleaned_extracted[field] != DEFAULT_VALUE:
                 extracted_name = cleaned_extracted[field]
                 logger.info(f"Found name in documents: {extracted_name}")
                 break
         
+        # Check for passport number
+        for field in ['passport_number', 'passport_no']:
+            if field in cleaned_extracted and cleaned_extracted[field] != DEFAULT_VALUE:
+                extracted_passport = cleaned_extracted[field]
+                logger.info(f"Found passport in documents: {extracted_passport}")
+                break
+                
+        # Check for Emirates ID
+        for field in ['emirates_id', 'eid']:
+            if field in cleaned_extracted and cleaned_extracted[field] != DEFAULT_VALUE:
+                extracted_emirates_id = cleaned_extracted[field]
+                logger.info(f"Found Emirates ID in documents: {extracted_emirates_id}")
+                break
+                
+        # Log what identifiers we have for matching
+        logger.info(f"Document identifiers for matching - Name: {extracted_name}, Passport: {extracted_passport}, Emirates ID: {extracted_emirates_id}")
+        
         result_rows = []
         
-        # First, check if we need to do name matching
-        need_matching = False
-        if extracted_name and len(excel_data) > 1:
-            # Look for exact match in Excel data
-            exact_match_found = False
-            for idx, row in excel_data.iterrows():
-                first_name = str(row.get('First Name', '')).strip()
-                last_name = str(row.get('Last Name', '')).strip()
-                employee_name = f"{first_name} {last_name}".strip()
-                
-                # Check for exact match
-                if extracted_name.lower() == employee_name.lower():
-                    exact_match_found = True
-                    break
-                    
-            # Only do matching if we found an exact match
-            need_matching = exact_match_found
-            
-        # Process each Excel row
+        # Determine if we should do matching
+        do_matching = True
+        if len(excel_data) == 1:
+            # If only one row, always apply document data
+            do_matching = False
+            logger.info("Only one Excel row, applying document data without matching")
+        
+        # Process each Excel row INDIVIDUALLY
         for idx, excel_row in excel_data.iterrows():
             # Clean Excel row
             excel_dict = excel_row.to_dict()
             cleaned_excel = self._clean_excel_data(excel_dict)
             
-            # Determine if we should apply document data to this row
-            apply_document_data = True
+            # Extract row identifiers
+            row_passport = None
+            row_emirates_id = None
+            row_name = None
             
-            # If we need matching, check if this row matches
-            if need_matching and extracted_name:
-                first_name = str(excel_dict.get('First Name', '')).strip()
-                last_name = str(excel_dict.get('Last Name', '')).strip()
-                employee_name = f"{first_name} {last_name}".strip()
-                
-                # Check if names match
-                name_match = extracted_name.lower() == employee_name.lower()
-                if not name_match:
-                    # Try partial matching
-                    common_words = set(extracted_name.lower().split()) & set(employee_name.lower().split())
-                    name_match = len(common_words) > 0
+            # Get passport from row (try different field names)
+            for field in ['passport_no', 'Passport No', 'PassportNo']:
+                if field in cleaned_excel and cleaned_excel[field] != DEFAULT_VALUE:
+                    row_passport = str(cleaned_excel[field]).strip()
+                    break
                     
-                apply_document_data = name_match
-                logger.info(f"Row {idx}: {employee_name}, match with document name '{extracted_name}': {name_match}")
+            # Get Emirates ID from row
+            for field in ['emirates_id', 'Emirates Id', 'EID']:
+                if field in cleaned_excel and cleaned_excel[field] != DEFAULT_VALUE:
+                    row_emirates_id = str(cleaned_excel[field]).strip()
+                    break
+                    
+            # Get name from row
+            first_name = str(cleaned_excel.get('First Name', '')).strip()
+            last_name = str(cleaned_excel.get('Last Name', '')).strip()
             
-            # Combine row data
-            combined_row = self._combine_row_data(
+            if first_name or last_name:
+                row_name = f"{first_name} {last_name}".strip()
+            
+            # Log row identifiers
+            logger.info(f"Row {idx} identifiers - Name: {row_name}, Passport: {row_passport}, Emirates ID: {row_emirates_id}")
+            
+            # Determine if we should apply document data to this row
+            apply_document_data = False
+            
+            if not do_matching:
+                # If not doing matching, apply to all rows
+                apply_document_data = True
+            else:
+                # Calculate match score
+                match_score = 0
+                match_reason = []
+                
+                # Strong matches - Passport number
+                if extracted_passport and row_passport:
+                    if extracted_passport.lower() == row_passport.lower():
+                        match_score += 100
+                        match_reason.append(f"Passport match: {extracted_passport}")
+                        
+                # Strong matches - Emirates ID
+                if extracted_emirates_id and row_emirates_id:
+                    # Clean both for comparison (remove spaces, hyphens)
+                    clean_extracted_id = re.sub(r'[^0-9]', '', str(extracted_emirates_id))
+                    clean_row_id = re.sub(r'[^0-9]', '', str(row_emirates_id))
+                    
+                    if clean_extracted_id == clean_row_id:
+                        match_score += 100
+                        match_reason.append(f"Emirates ID match: {extracted_emirates_id}")
+                
+                # Medium matches - Name similarity
+                if extracted_name and row_name:
+                    # Calculate name similarity
+                    extracted_words = set(extracted_name.lower().split())
+                    row_words = set(row_name.lower().split())
+                    
+                    # Find common words
+                    common_words = extracted_words.intersection(row_words)
+                    
+                    if common_words:
+                        # Calculate similarity percentage
+                        similarity = len(common_words) / max(len(extracted_words), len(row_words))
+                        name_score = int(similarity * 50)  # Max 50 points for name matching
+                        match_score += name_score
+                        match_reason.append(f"Name similarity: {similarity:.2f} ({', '.join(common_words)})")
+                
+                # Decide if this row matches based on score
+                if match_score >= 50:  # Threshold for considering a match
+                    apply_document_data = True
+                    logger.info(f"Row {idx} MATCHES document data (score: {match_score}) - {', '.join(match_reason)}")
+                else:
+                    logger.info(f"Row {idx} does NOT match document data (score: {match_score})")
+            
+            # IMPORTANT: Create a deep copy for each row to avoid shared references
+            row_combined = copy.deepcopy(self._combine_row_data(
                 cleaned_extracted if apply_document_data else {}, 
-                cleaned_excel, 
+                cleaned_excel,
                 document_paths if apply_document_data else None
-            )
+            ))
             
             # Map to template
-            mapped_row = self._map_to_template(combined_row, template_columns, field_mappings)
+            row_mapped = self._map_to_template(row_combined, template_columns, field_mappings)
             
             # Ensure standard fields are set regardless of document matching
-            # Fill in common mandatory fields for all rows
-            self._apply_standard_fields(mapped_row)
+            self._apply_standard_fields(row_mapped)
             
-            # Process emirates_id
-            if 'Emirates Id' in mapped_row and mapped_row['Emirates Id'] != DEFAULT_VALUE:
-                mapped_row['Emirates Id'] = self._format_emirates_id(mapped_row['Emirates Id'])
+            # Process emirates_id if present
+            if 'Emirates Id' in row_mapped and row_mapped['Emirates Id'] != DEFAULT_VALUE:
+                row_mapped['Emirates Id'] = self._format_emirates_id(row_mapped['Emirates Id'])
             
             # Add row to results
-            result_rows.append(mapped_row)
+            result_rows.append(row_mapped)
         
-        return pd.DataFrame(result_rows)
+        # Create DataFrame from rows
+        result_df = pd.DataFrame(result_rows)
         
-        # Final check for Emirates ID across all rows
-        if 'Emirates Id' in result_df.columns:
-            result_df['Emirates Id'] = result_df['Emirates Id'].apply(self._format_emirates_id)
+        # Apply final formatting
+        result_df = self._format_fields_for_output(result_df)
         
         return result_df
 
