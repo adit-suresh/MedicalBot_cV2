@@ -1827,51 +1827,73 @@ class WorkflowTester:
                             template_row['DOB'] = str(row[client_field]).strip()
                         break
                 
-                # Map Salary for Salary Band
-                for client_field in ['Salary', 'SalaryAmount', 'MonthlySalary', 'BasicSalary']:
-                    if client_field in client_df.columns and pd.notna(row[client_field]):
-                        if is_nas:
-                            template_row['Salary Band'] = str(row[client_field]).strip()
-                        elif is_almadallah:
-                            template_row['Salary Band'] = str(row[client_field]).strip()
+                # First check if there's a Salary Band field in the client Excel
+                for salary_band_field in ['Salary Band', 'SalaryBand', 'Salary_Band', 'salary band', 'salary_band']:
+                    if salary_band_field in client_df.columns and pd.notna(row[salary_band_field]):
+                        # Directly copy the value
+                        template_row['Salary Band'] = str(row[salary_band_field]).strip()
+                        logger.info(f"Copied Salary Band directly: '{template_row['Salary Band']}'")
                         break
+                else:
+                    # If no direct Salary Band field, fallback to default
+                    template_row['Salary Band'] = 'less than 4000'
+                    logger.info(f"No Salary Band field found, using default: '{template_row['Salary Band']}'")
+
                 
                 # SPECIAL HANDLING FOR NAME FIELDS
-                # Try different name field variations
+                # Check if the FirstName column contains full names that need splitting
                 name_found = False
-                
-                # Check for separate first/middle/last name fields
                 first_name = ""
                 middle_name = "."
                 last_name = ""
-                
+
                 # Look for explicit first, middle, last name fields
                 for fn_field in ['FirstName', 'First Name', 'FName', 'GivenName']:
                     if fn_field in client_df.columns and pd.notna(row[fn_field]):
                         first_name = str(row[fn_field]).strip()
                         name_found = True
+                        
+                        # If FirstName contains multiple words, split it immediately
+                        full_name = first_name
+                        name_parts = full_name.split()
+                        
+                        if len(name_parts) >= 2:  # If there are at least 2 words, split it
+                            logger.info(f"Splitting multi-word name '{full_name}' for row {idx}")
+                            if len(name_parts) >= 3:
+                                # If 3+ words: first word is first name, second is middle name, rest is last name
+                                first_name = name_parts[0]
+                                middle_name = name_parts[1]
+                                last_name = ' '.join(name_parts[2:])
+                            else:  # Exactly 2 words
+                                # First word is first name, middle is ".", second word is last name
+                                first_name = name_parts[0]
+                                middle_name = "."
+                                last_name = name_parts[1]
+                            logger.info(f"Split into First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
                         break
-                
-                for mn_field in ['MiddleName', 'Middle Name', 'MName']:
-                    if mn_field in client_df.columns and pd.notna(row[mn_field]):
-                        middle_name = str(row[mn_field]).strip()
-                        if not middle_name:
-                            middle_name = "."
-                        break
-                
-                for ln_field in ['LastName', 'Last Name', 'LName', 'Surname', 'FamilyName']:
-                    if ln_field in client_df.columns and pd.notna(row[ln_field]):
-                        last_name = str(row[ln_field]).strip()
-                        break
-                
+
+                # Check for middle and last name fields only if we haven't already handled them above
+                if not len(first_name.split()) >= 2:  # Skip if we already split a multi-word name
+                    for mn_field in ['MiddleName', 'Middle Name', 'MName']:
+                        if mn_field in client_df.columns and pd.notna(row[mn_field]):
+                            middle_name = str(row[mn_field]).strip()
+                            if not middle_name:
+                                middle_name = "."
+                            break
+                    
+                    for ln_field in ['LastName', 'Last Name', 'LName', 'Surname', 'FamilyName']:
+                        if ln_field in client_df.columns and pd.notna(row[ln_field]):
+                            last_name = str(row[ln_field]).strip()
+                            break
+
                 # Check for full name field if individual components weren't found
                 if not name_found or not first_name:
-                    for name_field in ['Name', 'FullName', 'Full Name', 'EmployeeName', 'FirstName', 'First Name']:
+                    for name_field in ['Name', 'FullName', 'Full Name', 'EmployeeName']:
                         if name_field in client_df.columns and pd.notna(row[name_field]):
                             full_name = str(row[name_field]).strip()
                             logger.info(f"Processing name from '{name_field}' column: '{full_name}'")
                             
-                            # Force name splitting even if FirstName column exists
+                            # Split name into components
                             name_parts = full_name.split()
                             
                             if len(name_parts) >= 3:
@@ -1879,62 +1901,37 @@ class WorkflowTester:
                                 first_name = name_parts[0]
                                 middle_name = name_parts[1]
                                 last_name = ' '.join(name_parts[2:])
-                                logger.info(f"  Split into First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
                             elif len(name_parts) == 2:
                                 # If 2 words: first = first, middle = ".", last = second
                                 first_name = name_parts[0]
                                 middle_name = "."
                                 last_name = name_parts[1]
-                                logger.info(f"  Split into First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
                             elif len(name_parts) == 1:
                                 # If 1 word: first = that word, middle = ".", last = ""
                                 first_name = name_parts[0]
                                 middle_name = "."
                                 last_name = ""
-                                logger.info(f"  Split into First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
                             
+                            logger.info(f"Split into First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
                             name_found = True
-                            break  # This breaks out of the name field searching, but stays in the row processing loop
+                            break
 
-                # CRITICAL FIX - REMOVED THE INCORRECT BREAK HERE
-                # No need to exit the main processing loop after name splitting!
-
-                # ALWAYS force name splitting on the FirstName column if it contains multiple words
-                # This handles the 400+ client Excel case where FirstName has full names
-                if 'FirstName' in client_df.columns and pd.notna(row['FirstName']):
-                    full_name = str(row['FirstName']).strip()
-                    name_parts = full_name.split()
-                    
-                    if len(name_parts) >= 2:  # If FirstName has 2+ words, split it
-                        logger.info(f"Forcing name split on FirstName '{full_name}' for row {idx}")
-                        first_name = name_parts[0]
-                        
-                        if len(name_parts) >= 3:
-                            # First word as first name, second as middle, third+ as last
-                            middle_name = name_parts[1]
-                            last_name = ' '.join(name_parts[2:])
-                        else:  # Exactly 2 words
-                            # First word as first name, '.' as middle, second as last
-                            middle_name = "."
-                            last_name = name_parts[1]
-                            
-                        logger.info(f"  → Split into First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
-                        name_found = True
-                
-                # Log name field status
+                # Log final name components
                 logger.info(f"Final name components for row {idx}: First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
-                
+
                 # Apply the name fields to the template
                 if is_nas:
                     template_row['First Name'] = first_name
                     template_row['Middle Name'] = middle_name if middle_name else "."
                     template_row['Last Name'] = last_name
+                    # Double check the fields were actually set
+                    logger.info(f"Set template fields: First='{template_row['First Name']}', Middle='{template_row['Middle Name']}', Last='{template_row['Last Name']}'")
                 elif is_almadallah:
                     # For Al Madallah, we need to store in temp variables since 
                     # it doesn't have the same name fields as NAS
                     full_name = f"{first_name} {middle_name} {last_name}".replace(" . ", " ").strip()
                     # We'll use this for other matching fields later
-                
+
                 # TEMPLATE-SPECIFIC FIELDS
                 
                 # NAS Template specific fields
