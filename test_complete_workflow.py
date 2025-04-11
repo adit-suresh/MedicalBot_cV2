@@ -347,17 +347,20 @@ class WorkflowTester:
                 processed_docs = []
                 all_excel_rows = []  # Initialize this variable here
 
-                # First pass: identify Excel files and documents
                 for file_path in saved_files:
                     file_type = self._determine_file_type(file_path)
-                    logger.debug(f"Determined file type for {file_path}: {file_type}")
                     
                     if file_type == 'excel':
                         excel_files.append(file_path)
                     else:
                         doc_path = os.path.join(submission_dir, os.path.basename(file_path))
                         shutil.copy2(file_path, doc_path)
-                        document_paths[file_type] = doc_path
+                        
+                        # Store multiple documents of the same type
+                        if file_type not in document_paths:
+                            document_paths[file_type] = []
+                        document_paths[file_type].append(doc_path)
+                        
                         processed_docs.append({
                             'type': file_type,
                             'original_name': os.path.basename(file_path),
@@ -447,42 +450,46 @@ class WorkflowTester:
                 logger.info(f"Processing {len(document_paths)} documents")
                 extracted_data = {}
                 
-                # Process documents with GPT first if available
+                # Process documents with GPT only
                 if self.gpt:
-                    for doc_type, file_path in document_paths.items():
-                        try:
-                            logger.info(f"Processing {doc_type} with GPT: {file_path}")
-                            gpt_data = self.gpt.process_document(file_path, doc_type)
-                            
-                            # Check if GPT extraction was successful
-                            if gpt_data and 'error' not in gpt_data:
-                                logger.info(f"GPT successfully extracted data from {doc_type}")
-                                # Update extracted data, giving priority to GPT results
-                                for key, value in gpt_data.items():
-                                    if key not in extracted_data or value != self.DEFAULT_VALUE:
-                                        extracted_data[key] = value
-                            else:
-                                logger.warning(f"GPT extraction failed for {doc_type}, will try Textract")
-                        except Exception as e:
-                            logger.error(f"Error processing {doc_type} with GPT: {str(e)}", exc_info=True)
-                            logger.warning(f"Will try Textract for {doc_type}")
-                
-                # Also try Textract for any missing fields or if GPT failed
-                for doc_type, file_path in document_paths.items():
-                    try:
-                        logger.info(f"Processing {doc_type} with Textract: {file_path}")
-                        textract_data = self.textract.process_document(file_path, doc_type)
-                        
-                        # Update extracted data, but don't overwrite GPT data with default values
-                        for key, value in textract_data.items():
-                            if key not in extracted_data or (value != self.DEFAULT_VALUE and extracted_data[key] == self.DEFAULT_VALUE):
-                                extracted_data[key] = value
-                        
-                        logger.info(f"Extracted data from {doc_type}: {list(textract_data.keys())}")
-                    except Exception as e:
-                        logger.error(f"Error processing {doc_type} document with Textract: {str(e)}", exc_info=True)
-                        # Continue with other documents instead of failing
-                        logger.warning(f"Continuing with partial data due to document processing error")
+                    for doc_type, paths in document_paths.items():
+                        if isinstance(paths, list):
+                            # Handle list of paths (new structure)
+                            for file_path in paths:
+                                try:
+                                    logger.info(f"Processing {doc_type} with GPT: {file_path}")
+                                    gpt_data = self.gpt.process_document(file_path, doc_type)
+                                    
+                                    # Check if GPT extraction was successful
+                                    if gpt_data and 'error' not in gpt_data:
+                                        logger.info(f"GPT successfully extracted data from {doc_type}")
+                                        # Update extracted data, giving priority to GPT results
+                                        for key, value in gpt_data.items():
+                                            if key not in extracted_data or value != self.DEFAULT_VALUE:
+                                                extracted_data[key] = value
+                                    else:
+                                        logger.warning(f"GPT extraction failed for {doc_type}")
+                                except Exception as e:
+                                    logger.error(f"Error processing {doc_type} with GPT: {str(e)}", exc_info=True)
+                        else:
+                            # Handle single path (old structure)
+                            try:
+                                logger.info(f"Processing {doc_type} with GPT: {paths}")
+                                gpt_data = self.gpt.process_document(paths, doc_type)
+                                
+                                # Check if GPT extraction was successful
+                                if gpt_data and 'error' not in gpt_data:
+                                    logger.info(f"GPT successfully extracted data from {doc_type}")
+                                    # Update extracted data, giving priority to GPT results
+                                    for key, value in gpt_data.items():
+                                        if key not in extracted_data or value != self.DEFAULT_VALUE:
+                                            extracted_data[key] = value
+                                else:
+                                    logger.warning(f"GPT extraction failed for {doc_type}")
+                            except Exception as e:
+                                logger.error(f"Error processing {doc_type} with GPT: {str(e)}", exc_info=True)
+                else:
+                    logger.warning("GPT processor not available. Document processing will be limited.")
                 
                 # Log the combined extracted data
                 logger.info(f"Combined extracted data contains {len(extracted_data)} fields: {list(extracted_data.keys())}")
@@ -553,58 +560,108 @@ class WorkflowTester:
                 
                 # Process each document type to extract data
                 doc_data_by_type = {}
-                for doc_type, file_path in document_paths.items():
-                    try:
-                        # Process with GPT first if available
-                        if self.gpt:
+                for doc_type, paths in document_paths.items():
+                    if isinstance(paths, list):
+                        # Handle list of paths (new structure)
+                        for file_path in paths:
                             try:
-                                doc_data = self.gpt.process_document(file_path, doc_type)
-                                if doc_data and 'error' not in doc_data:
-                                    doc_data_by_type[doc_type] = doc_data
-                                    continue
+                                # Process with GPT first if available
+                                if self.gpt:
+                                    try:
+                                        doc_data = self.gpt.process_document(file_path, doc_type)
+                                        if doc_data and 'error' not in doc_data:
+                                            if doc_type not in doc_data_by_type:
+                                                doc_data_by_type[doc_type] = {}
+                                            # Merge with existing data
+                                            for key, value in doc_data.items():
+                                                doc_data_by_type[doc_type][key] = value
+                                            continue
+                                    except Exception as e:
+                                        logger.warning(f"GPT extraction failed for {doc_type}, using Textract: {str(e)}")
+                                
+                                # Fallback to Textract
+                                doc_data = self.textract.process_document(file_path, doc_type)
+                                if doc_type not in doc_data_by_type:
+                                    doc_data_by_type[doc_type] = {}
+                                # Merge with existing data
+                                for key, value in doc_data.items():
+                                    doc_data_by_type[doc_type][key] = value
                             except Exception as e:
-                                logger.warning(f"GPT extraction failed for {doc_type}, using Textract: {str(e)}")
-                        
-                        # Fallback to Textract
-                        doc_data = self.textract.process_document(file_path, doc_type)
-                        doc_data_by_type[doc_type] = doc_data
-                        
-                        # Added debug logs
-                        logger.info("===== EXTRACTED DOCUMENT DATA =====")
-                        for doc_type, doc_data in doc_data_by_type.items():
-                            logger.info(f"Document type: {doc_type}")
-                            for key, value in doc_data.items():
-                                if value != self.DEFAULT_VALUE:
-                                    logger.info(f"  - {key}: {value}")
-                        
-                    except Exception as e:
-                        logger.error(f"Error processing {doc_type} document: {str(e)}")
+                                logger.error(f"Error processing {doc_type} document: {str(e)}")
+                    else:
+                        # Handle single path (old structure)
+                        try:
+                            # Process with GPT first if available
+                            if self.gpt:
+                                try:
+                                    doc_data = self.gpt.process_document(paths, doc_type)
+                                    if doc_data and 'error' not in doc_data:
+                                        doc_data_by_type[doc_type] = doc_data
+                                        continue
+                                except Exception as e:
+                                    logger.warning(f"GPT extraction failed for {doc_type}, using Textract: {str(e)}")
+                            
+                            # Fallback to Textract
+                            doc_data = self.textract.process_document(paths, doc_type)
+                            doc_data_by_type[doc_type] = doc_data
+                        except Exception as e:
+                            logger.error(f"Error processing {doc_type} document: {str(e)}")
                 
                 # Process each Excel row INDIVIDUALLY with better matching logic
                 all_excel_rows = []
                 doc_data_by_type = {}
 
                 # First extract data from all documents
-                for doc_type, file_path in document_paths.items():
-                    try:
-                        # Process with GPT first if available (prioritize GPT as mentioned)
-                        if self.gpt:
+                for doc_type, paths in document_paths.items():
+                    if isinstance(paths, list):
+                        # Handle list of paths (new structure)
+                        for file_path in paths:
                             try:
-                                doc_data = self.gpt.process_document(file_path, doc_type)
-                                if doc_data and 'error' not in doc_data:
-                                    doc_data_by_type[doc_type] = doc_data
-                                    logger.info(f"GPT successfully extracted data from {doc_type}")
-                                    continue  # Skip Textract if GPT succeeded
+                                # Process with GPT first if available (prioritize GPT as mentioned)
+                                if self.gpt:
+                                    try:
+                                        doc_data = self.gpt.process_document(file_path, doc_type)
+                                        if doc_data and 'error' not in doc_data:
+                                            if doc_type not in doc_data_by_type:
+                                                doc_data_by_type[doc_type] = {}
+                                            # Merge with existing data
+                                            for key, value in doc_data.items():
+                                                doc_data_by_type[doc_type][key] = value
+                                            logger.info(f"GPT successfully extracted data from {doc_type}")
+                                            continue  # Skip Textract if GPT succeeded
+                                    except Exception as e:
+                                        logger.warning(f"GPT extraction failed for {doc_type}, using Textract: {str(e)}")
+                                
+                                # Fallback to Textract
+                                doc_data = self.textract.process_document(file_path, doc_type)
+                                if doc_type not in doc_data_by_type:
+                                    doc_data_by_type[doc_type] = {}
+                                # Merge with existing data
+                                for key, value in doc_data.items():
+                                    doc_data_by_type[doc_type][key] = value
+                                logger.info(f"Textract extracted data from {doc_type}")
                             except Exception as e:
-                                logger.warning(f"GPT extraction failed for {doc_type}, using Textract: {str(e)}")
-                        
-                        # Fallback to Textract
-                        doc_data = self.textract.process_document(file_path, doc_type)
-                        doc_data_by_type[doc_type] = doc_data
-                        logger.info(f"Textract extracted data from {doc_type}")
-                        
-                    except Exception as e:
-                        logger.error(f"Error processing {doc_type} document: {str(e)}")
+                                logger.error(f"Error processing {doc_type} document: {str(e)}")
+                    else:
+                        # Handle single path (old structure)
+                        try:
+                            # Process with GPT first if available (prioritize GPT as mentioned)
+                            if self.gpt:
+                                try:
+                                    doc_data = self.gpt.process_document(paths, doc_type)
+                                    if doc_data and 'error' not in doc_data:
+                                        doc_data_by_type[doc_type] = doc_data
+                                        logger.info(f"GPT successfully extracted data from {doc_type}")
+                                        continue  # Skip Textract if GPT succeeded
+                                except Exception as e:
+                                    logger.warning(f"GPT extraction failed for {doc_type}, using Textract: {str(e)}")
+                            
+                            # Fallback to Textract
+                            doc_data = self.textract.process_document(paths, doc_type)
+                            doc_data_by_type[doc_type] = doc_data
+                            logger.info(f"Textract extracted data from {doc_type}")
+                        except Exception as e:
+                            logger.error(f"Error processing {doc_type} document: {str(e)}")
 
                 # Combine all document data into one dictionary for template population
                 extracted_data = {}
@@ -786,7 +843,11 @@ class WorkflowTester:
                             # Check which documents were found and converted
                             logger.info(f"Documents found: {len(document_paths)}")
                             for doc_type, doc_path in document_paths.items():
-                                logger.info(f"Document: {doc_type} - {os.path.basename(doc_path)}")
+                                if isinstance(doc_path, list):
+                                    for path in doc_path:
+                                        logger.info(f"Document: {doc_type} - {os.path.basename(path)}")
+                                else:
+                                    logger.info(f"Document: {doc_type} - {os.path.basename(doc_path)}")
                                 
                                 # Check if it was converted from PDF to JPG
                                 converted_dir = os.path.join(os.path.dirname(doc_path), "converted")
@@ -816,20 +877,38 @@ class WorkflowTester:
                                 logger.warning("No document data extracted but documents exist. Forcing extraction with Textract...")
                                 
                                 # Force processing with Textract
-                                for doc_type, file_path in document_paths.items():
-                                    try:
-                                        logger.info(f"Force processing {doc_type} with Textract: {file_path}")
-                                        textract_data = self.textract.process_document(file_path, doc_type)
-                                        doc_data_by_type[doc_type] = textract_data
-                                        
-                                        # Update the combined extracted data
-                                        for key, value in textract_data.items():
-                                            if key not in extracted_data or (value != self.DEFAULT_VALUE and extracted_data[key] == self.DEFAULT_VALUE):
-                                                extracted_data[key] = value
-                                        
-                                        logger.info(f"Forced extraction from {doc_type}: {list(textract_data.keys())}")
-                                    except Exception as e:
-                                        logger.error(f"Error in forced processing of {doc_type} document: {str(e)}", exc_info=True)
+                                for doc_type, paths in document_paths.items():
+                                    if isinstance(paths, list):
+                                        # Handle list of paths (new structure)
+                                        for file_path in paths:
+                                            try:
+                                                logger.info(f"Force processing {doc_type} with Textract: {file_path}")
+                                                textract_data = self.textract.process_document(file_path, doc_type)
+                                                if doc_type not in doc_data_by_type:
+                                                    doc_data_by_type[doc_type] = {}
+                                                # Merge with existing data
+                                                for key, value in textract_data.items():
+                                                    doc_data_by_type[doc_type][key] = value
+                                                
+                                                # Update the combined extracted data
+                                                for key, value in textract_data.items():
+                                                    if key not in extracted_data or (value != self.DEFAULT_VALUE and extracted_data[key] == self.DEFAULT_VALUE):
+                                                        extracted_data[key] = value
+                                            except Exception as e:
+                                                logger.error(f"Error in forced processing of {doc_type} document: {str(e)}", exc_info=True)
+                                    else:
+                                        # Handle single path (old structure)
+                                        try:
+                                            logger.info(f"Force processing {doc_type} with Textract: {paths}")
+                                            textract_data = self.textract.process_document(paths, doc_type)
+                                            doc_data_by_type[doc_type] = textract_data
+                                            
+                                            # Update the combined extracted data
+                                            for key, value in textract_data.items():
+                                                if key not in extracted_data or (value != self.DEFAULT_VALUE and extracted_data[key] == self.DEFAULT_VALUE):
+                                                    extracted_data[key] = value
+                                        except Exception as e:
+                                            logger.error(f"Error in forced processing of {doc_type} document: {str(e)}", exc_info=True)
                                 
                                 # Log the updated extracted data
                                 if doc_data_by_type:
@@ -886,6 +965,18 @@ class WorkflowTester:
                     submission_dir,
                     f"final_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
                 )
+                
+                if all_excel_rows is None or len(all_excel_rows) == 0:
+                    logger.warning("No Excel data found. Creating default Excel data...")
+                    # Create default Excel data with at least basic structure
+                    all_excel_rows = [{
+                        "First Name": "",
+                        "Middle Name": ".",
+                        "Last Name": "",
+                        "Effective Date": datetime.now().strftime('%d/%m/%Y'),
+                        "DOB": "",
+                        "Gender": ""
+                    }]
 
                 # Use selected template instead of hardcoded "template.xlsx"
                 result = self.data_combiner.combine_and_populate_template(
@@ -1123,107 +1214,212 @@ class WorkflowTester:
                 return updated_paths
             
             # Process each document using the regular matching approach
-            for doc_type, file_path in document_paths.items():
-                try:
-                    # Skip if file doesn't exist
-                    if not os.path.exists(file_path):
-                        logger.warning(f"File not found: {file_path}")
-                        updated_paths[doc_type] = file_path
-                        continue
-                        
-                    # Extract file info
-                    file_dir = os.path.dirname(file_path)
-                    file_ext = os.path.splitext(file_path)[1]
-                    file_name = os.path.basename(file_path).lower()
-                    
-                    # Find matching staff ID
-                    matched_staff_id = None
-                    
-                    # Strategy 1: Check if staff ID is already in the filename
-                    for staff_id in staff_id_map:
-                        if staff_id.lower() in file_name:
-                            matched_staff_id = staff_id
-                            logger.info(f"Found staff ID {staff_id} in filename {file_name}")
-                            break
-                    
-                    # Strategy 2: Try to match by name if no staff ID match
-                    if not matched_staff_id:
-                        best_match = None
-                        best_score = 0
-                        
-                        for staff_id, info in staff_id_map.items():
-                            score = 0
+            updated_paths = {}
+            for doc_type, paths in document_paths.items():
+                if isinstance(paths, list):
+                    # Handle list of paths (new structure)
+                    updated_paths[doc_type] = []
+                    for file_path in paths:
+                        try:
+                            # Skip if file doesn't exist
+                            if not os.path.exists(file_path):
+                                logger.warning(f"File not found: {file_path}")
+                                updated_paths[doc_type].append(file_path)
+                                continue
+                                
+                            # Extract file info
+                            file_dir = os.path.dirname(file_path)
+                            file_ext = os.path.splitext(file_path)[1]
+                            file_name = os.path.basename(file_path).lower()
                             
-                            # Check for first name match
-                            if info['first_name'] and info['first_name'].lower() in file_name:
-                                score += 5
+                            # Find matching staff ID
+                            matched_staff_id = None
+                            
+                            # Strategy 1: Check if staff ID is already in the filename
+                            for staff_id in staff_id_map:
+                                if staff_id.lower() in file_name:
+                                    matched_staff_id = staff_id
+                                    logger.info(f"Found staff ID {staff_id} in filename {file_name}")
+                                    break
+                            
+                            # Strategy 2: Try to match by name if no staff ID match
+                            if not matched_staff_id:
+                                best_match = None
+                                best_score = 0
                                 
-                            # Check for last name match (weighted higher)
-                            if info['last_name'] and info['last_name'].lower() in file_name:
-                                score += 10
+                                for staff_id, info in staff_id_map.items():
+                                    score = 0
+                                    
+                                    # Check for first name match
+                                    if info['first_name'] and info['first_name'].lower() in file_name:
+                                        score += 5
+                                        
+                                    # Check for last name match (weighted higher)
+                                    if info['last_name'] and info['last_name'].lower() in file_name:
+                                        score += 10
+                                        
+                                    # Check for full name match
+                                    if info['full_name'] and info['full_name'].lower() in file_name:
+                                        score += 15
+                                        
+                                    # Update best match if better score
+                                    if score > best_score:
+                                        best_score = score
+                                        best_match = staff_id
                                 
-                            # Check for full name match
-                            if info['full_name'] and info['full_name'].lower() in file_name:
-                                score += 15
-                                
-                            # Update best match if better score
-                            if score > best_score:
-                                best_score = score
-                                best_match = staff_id
+                                # Use match if score is high enough
+                                if best_match and best_score >= 5:
+                                    matched_staff_id = best_match
+                                    logger.info(f"Matched file {file_name} to staff ID {matched_staff_id} by name (score: {best_score})")
+                            
+                            # If no match found, try the first staff ID as a fallback
+                            if not matched_staff_id and staff_id_map:
+                                matched_staff_id = list(staff_id_map.keys())[0]
+                                logger.warning(f"No match found for {file_name}, using first staff ID: {matched_staff_id}")
+                            
+                            # If no staff ID available, keep original name
+                            if not matched_staff_id:
+                                logger.warning(f"No staff ID available, keeping original name for {file_name}")
+                                updated_paths[doc_type].append(file_path)
+                                continue
+                            
+                            # Determine document type suffix
+                            if 'passport' in doc_type.lower():
+                                doc_suffix = "PASSPORT"
+                            elif 'emirates' in doc_type.lower() or 'eid' in doc_type.lower():
+                                doc_suffix = "EMIRATES_ID"
+                            elif 'visa' in doc_type.lower() or 'permit' in doc_type.lower():
+                                doc_suffix = "VISA"
+                            else:
+                                # Use doc_type as is for other document types
+                                doc_suffix = doc_type.upper()
+                            
+                            # Create new filename with staff ID and doc type
+                            import re
+                            safe_id = re.sub(r'[<>:"/\\|?*]', '_', matched_staff_id)
+                            new_name = f"{safe_id}_{doc_suffix}{file_ext}"
+                            new_path = os.path.join(file_dir, new_name)
+                            
+                            # Ensure no filename conflicts
+                            if os.path.exists(new_path) and os.path.abspath(new_path) != os.path.abspath(file_path):
+                                import uuid
+                                unique = str(uuid.uuid4())[:8]
+                                new_name = f"{safe_id}_{doc_suffix}_{unique}{file_ext}"
+                                new_path = os.path.join(file_dir, new_name)
+                            
+                            # Rename file
+                            os.rename(file_path, new_path)
+                            logger.info(f"Renamed file: {os.path.basename(file_path)} -> {new_name}")
+                            
+                            # Update path in result
+                            updated_paths[doc_type].append(new_path)
+                            
+                        except Exception as e:
+                            logger.error(f"Error renaming file {file_path}: {str(e)}")
+                            updated_paths[doc_type].append(file_path)
+                            
+                else:
+                    # Handle single path (old structure)
+                    try:
+                        # Skip if file doesn't exist
+                        if not os.path.exists(paths):
+                            logger.warning(f"File not found: {paths}")
+                            updated_paths[doc_type] = paths
+                            continue
+                            
+                        # Extract file info
+                        file_dir = os.path.dirname(paths)
+                        file_ext = os.path.splitext(paths)[1]
+                        file_name = os.path.basename(paths).lower()
                         
-                        # Use match if score is high enough
-                        if best_match and best_score >= 5:
-                            matched_staff_id = best_match
-                            logger.info(f"Matched file {file_name} to staff ID {matched_staff_id} by name (score: {best_score})")
-                    
-                    # If no match found, try the first staff ID as a fallback
-                    if not matched_staff_id and staff_id_map:
-                        matched_staff_id = list(staff_id_map.keys())[0]
-                        logger.warning(f"No match found for {file_name}, using first staff ID: {matched_staff_id}")
-                    
-                    # If no staff ID available, keep original name
-                    if not matched_staff_id:
-                        logger.warning(f"No staff ID available, keeping original name for {file_name}")
-                        updated_paths[doc_type] = file_path
-                        continue
-                    
-                    # Determine document type suffix
-                    if 'passport' in doc_type.lower():
-                        doc_suffix = "PASSPORT"
-                    elif 'emirates' in doc_type.lower() or 'eid' in doc_type.lower():
-                        doc_suffix = "EMIRATES_ID"
-                    elif 'visa' in doc_type.lower() or 'permit' in doc_type.lower():
-                        doc_suffix = "VISA"
-                    else:
-                        # Use doc_type as is for other document types
-                        doc_suffix = doc_type.upper()
-                    
-                    # Create new filename with staff ID and doc type
-                    import re
-                    safe_id = re.sub(r'[<>:"/\\|?*]', '_', matched_staff_id)
-                    new_name = f"{safe_id}_{doc_suffix}{file_ext}"
-                    new_path = os.path.join(file_dir, new_name)
-                    
-                    # Ensure no filename conflicts
-                    if os.path.exists(new_path) and os.path.abspath(new_path) != os.path.abspath(file_path):
-                        import uuid
-                        unique = str(uuid.uuid4())[:8]
-                        new_name = f"{safe_id}_{doc_suffix}_{unique}{file_ext}"
+                        # Find matching staff ID
+                        matched_staff_id = None
+                        
+                        # Strategy 1: Check if staff ID is already in the filename
+                        for staff_id in staff_id_map:
+                            if staff_id.lower() in file_name:
+                                matched_staff_id = staff_id
+                                logger.info(f"Found staff ID {staff_id} in filename {file_name}")
+                                break
+                        
+                        # Strategy 2: Try to match by name if no staff ID match
+                        if not matched_staff_id:
+                            best_match = None
+                            best_score = 0
+                            
+                            for staff_id, info in staff_id_map.items():
+                                score = 0
+                                
+                                # Check for first name match
+                                if info['first_name'] and info['first_name'].lower() in file_name:
+                                    score += 5
+                                    
+                                # Check for last name match (weighted higher)
+                                if info['last_name'] and info['last_name'].lower() in file_name:
+                                    score += 10
+                                    
+                                # Check for full name match
+                                if info['full_name'] and info['full_name'].lower() in file_name:
+                                    score += 15
+                                    
+                                # Update best match if better score
+                                if score > best_score:
+                                    best_score = score
+                                    best_match = staff_id
+                            
+                            # Use match if score is high enough
+                            if best_match and best_score >= 5:
+                                matched_staff_id = best_match
+                                logger.info(f"Matched file {file_name} to staff ID {matched_staff_id} by name (score: {best_score})")
+                        
+                        # If no match found, try the first staff ID as a fallback
+                        if not matched_staff_id and staff_id_map:
+                            matched_staff_id = list(staff_id_map.keys())[0]
+                            logger.warning(f"No match found for {file_name}, using first staff ID: {matched_staff_id}")
+                        
+                        # If no staff ID available, keep original name
+                        if not matched_staff_id:
+                            logger.warning(f"No staff ID available, keeping original name for {file_name}")
+                            updated_paths[doc_type] = paths
+                            continue
+                        
+                        # Determine document type suffix
+                        if 'passport' in doc_type.lower():
+                            doc_suffix = "PASSPORT"
+                        elif 'emirates' in doc_type.lower() or 'eid' in doc_type.lower():
+                            doc_suffix = "EMIRATES_ID"
+                        elif 'visa' in doc_type.lower() or 'permit' in doc_type.lower():
+                            doc_suffix = "VISA"
+                        else:
+                            # Use doc_type as is for other document types
+                            doc_suffix = doc_type.upper()
+                        
+                        # Create new filename with staff ID and doc type
+                        import re
+                        safe_id = re.sub(r'[<>:"/\\|?*]', '_', matched_staff_id)
+                        new_name = f"{safe_id}_{doc_suffix}{file_ext}"
                         new_path = os.path.join(file_dir, new_name)
-                    
-                    # Rename file
-                    os.rename(file_path, new_path)
-                    logger.info(f"Renamed file: {os.path.basename(file_path)} -> {new_name}")
-                    
-                    # Update path in result
-                    updated_paths[doc_type] = new_path
-                    
-                except Exception as e:
-                    logger.error(f"Error renaming file {file_path}: {str(e)}")
-                    updated_paths[doc_type] = file_path
-            
+                        
+                        # Ensure no filename conflicts
+                        if os.path.exists(new_path) and os.path.abspath(new_path) != os.path.abspath(paths):
+                            import uuid
+                            unique = str(uuid.uuid4())[:8]
+                            new_name = f"{safe_id}_{doc_suffix}_{unique}{file_ext}"
+                            new_path = os.path.join(file_dir, new_name)
+                        
+                        # Rename file
+                        os.rename(paths, new_path)
+                        logger.info(f"Renamed file: {os.path.basename(paths)} -> {new_name}")
+                        
+                        # Update path in result
+                        updated_paths[doc_type] = new_path
+                        
+                    except Exception as e:
+                        logger.error(f"Error renaming file {paths}: {str(e)}")
+                        updated_paths[doc_type] = paths
+
             return updated_paths
-            
+        
         except Exception as e:
             logger.error(f"Error in rename_client_files: {str(e)}")
             return document_paths
@@ -1430,41 +1626,79 @@ class WorkflowTester:
         
         # For each document, try to extract name and match to employee
         document_matches = {}
-        for doc_type, file_path in document_paths.items():
-            try:
-                # Process document to extract data
-                doc_data = self.textract.process_document(file_path, doc_type)
-                
-                # Look for name in extracted data
-                extracted_name = None
-                for field in ['name', 'full_name']:
-                    if field in doc_data and doc_data[field] != '.':
-                        extracted_name = doc_data[field]
-                        break
-                
-                if not extracted_name:
-                    continue
+        for doc_type, paths in document_paths.items():
+            if isinstance(paths, list):
+                # Handle list of paths (new structure)
+                for file_path in paths:
+                    try:
+                        # Process document to extract data
+                        doc_data = self.textract.process_document(file_path, doc_type)
+                        
+                        # Look for name in extracted data
+                        extracted_name = None
+                        for field in ['name', 'full_name']:
+                            if field in doc_data and doc_data[field] != '.':
+                                extracted_name = doc_data[field]
+                                break
+                        
+                        if not extracted_name:
+                            continue
+                            
+                        # Find best employee match
+                        best_match = None
+                        best_score = 0
+                        for emp in employee_names:
+                            score = self._calculate_name_match_score(extracted_name, emp['full_name'])
+                            if score > best_score:
+                                best_score = score
+                                best_match = emp
+                        
+                        # If good match found, assign document to employee
+                        if best_match and best_score > 50:
+                            idx = best_match['index']
+                            if idx not in document_matches:
+                                document_matches[idx] = {}
+                            document_matches[idx][doc_type] = file_path
+                            logger.info(f"Matched {doc_type} to employee {best_match['full_name']} (score: {best_score})")
+                            
+                    except Exception as e:
+                        logger.error(f"Error matching document {doc_type} ({file_path}): {str(e)}")
+            else:
+                # Handle single path (old structure)
+                try:
+                    # Process document to extract data
+                    doc_data = self.textract.process_document(paths, doc_type)
                     
-                # Find best employee match
-                best_match = None
-                best_score = 0
-                for emp in employee_names:
-                    score = self._calculate_name_match_score(extracted_name, emp['full_name'])
-                    if score > best_score:
-                        best_score = score
-                        best_match = emp
-                
-                # If good match found, assign document to employee
-                if best_match and best_score > 50:
-                    idx = best_match['index']
-                    if idx not in document_matches:
-                        document_matches[idx] = {}
-                    document_matches[idx][doc_type] = file_path
-                    logger.info(f"Matched {doc_type} to employee {best_match['full_name']} (score: {best_score})")
+                    # Look for name in extracted data
+                    extracted_name = None
+                    for field in ['name', 'full_name']:
+                        if field in doc_data and doc_data[field] != '.':
+                            extracted_name = doc_data[field]
+                            break
                     
-            except Exception as e:
-                logger.error(f"Error matching document {doc_type}: {str(e)}")
-        
+                    if not extracted_name:
+                        continue
+                        
+                    # Find best employee match
+                    best_match = None
+                    best_score = 0
+                    for emp in employee_names:
+                        score = self._calculate_name_match_score(extracted_name, emp['full_name'])
+                        if score > best_score:
+                            best_score = score
+                            best_match = emp
+                    
+                    # If good match found, assign document to employee
+                    if best_match and best_score > 50:
+                        idx = best_match['index']
+                        if idx not in document_matches:
+                            document_matches[idx] = {}
+                        document_matches[idx][doc_type] = paths
+                        logger.info(f"Matched {doc_type} to employee {best_match['full_name']} (score: {best_score})")
+                        
+                except Exception as e:
+                    logger.error(f"Error matching document {doc_type} ({paths}): {str(e)}")
+
         return document_matches
 
     def _calculate_name_match_score(self, name1: str, name2: str) -> int:
@@ -2148,6 +2382,8 @@ class WorkflowTester:
             }
             
             
+    # This function needs to be fixed in test_complete_workflow.py to prevent the TypeError
+
     def _log_document_matches(self, document_paths, excel_data, extracted_data_by_document):
         """
         Create detailed debug logs for document to employee matching.
@@ -2171,138 +2407,212 @@ class WorkflowTester:
             "matches": []
         }
         
-        # Document information
-        for doc_type, file_path in document_paths.items():
-            doc_info = {
-                "type": doc_type,
-                "file_path": file_path,
-                "key_identifiers": {}
-            }
-            
-            # Extract key identifiers from document
-            doc_data = extracted_data_by_document.get(doc_type, {})
-            
-            # Document name
-            for name_field in ['full_name', 'name']:
-                if name_field in doc_data and doc_data[name_field] != self.DEFAULT_VALUE:
-                    doc_info["key_identifiers"]["name"] = doc_data[name_field]
-                    break
+        # Document information - handle new list-based structure properly
+        for doc_type, paths in document_paths.items():
+            if isinstance(paths, list):
+                # Handle list of paths (new structure)
+                for path in paths:
+                    try:
+                        # Log document info
+                        logger.info(f"Document: {doc_type} - {os.path.basename(path)}")
+                        
+                        doc_info = {
+                            "type": doc_type,
+                            "file_path": path,
+                            "key_identifiers": {}
+                        }
+                        
+                        # Extract key identifiers from document
+                        doc_data = {}
+                        if doc_type in extracted_data_by_document:
+                            doc_data = extracted_data_by_document[doc_type]
+                        
+                        # Add key identifiers
+                        for id_type, field_names in [
+                            ("name", ['full_name', 'name']), 
+                            ("passport", ['passport_number', 'passport_no']),
+                            ("emirates_id", ['emirates_id', 'eid'])
+                        ]:
+                            for field in field_names:
+                                if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
+                                    doc_info["key_identifiers"][id_type] = doc_data[field]
+                                    logger.info(f"  - {id_type}: {doc_data[field]}")
+                                    break
+                        
+                        diagnostics["documents"].append(doc_info)
+                    except Exception as e:
+                        logger.error(f"Error processing document path: {str(e)}")
+            else:
+                # Handle single path (old structure)
+                try:
+                    # Log document info
+                    logger.info(f"Document: {doc_type} - {os.path.basename(paths)}")
                     
-            # Passport number
-            for field in ['passport_number', 'passport_no']:
-                if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
-                    doc_info["key_identifiers"]["passport"] = doc_data[field]
-                    break
-                    
-            # Emirates ID
-            for field in ['emirates_id', 'eid']:
-                if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
-                    doc_info["key_identifiers"]["emirates_id"] = doc_data[field]
-                    break
-            
-            # Log document info
-            logger.info(f"Document: {doc_type} - {os.path.basename(file_path)}")
-            for id_type, value in doc_info["key_identifiers"].items():
-                logger.info(f"  - {id_type}: {value}")
-                
-            diagnostics["documents"].append(doc_info)
-        
-        # Excel row information
-        for idx, row in enumerate(excel_data):
-            row_info = {
-                "row_index": idx,
-                "key_identifiers": {}
-            }
-            
-            # Row name
-            first_name = str(row.get('First Name', '')).strip()
-            last_name = str(row.get('Last Name', '')).strip()
-            row_name = f"{first_name} {last_name}".strip()
-            if row_name:
-                row_info["key_identifiers"]["name"] = row_name
-                
-            # Passport number
-            for field in ['passport_no', 'Passport No', 'PassportNo']:
-                if field in row and row[field] and row[field] != self.DEFAULT_VALUE:
-                    row_info["key_identifiers"]["passport"] = str(row[field]).strip()
-                    break
-                    
-            # Emirates ID
-            for field in ['emirates_id', 'Emirates Id', 'EID']:
-                if field in row and row[field] and row[field] != self.DEFAULT_VALUE:
-                    row_info["key_identifiers"]["emirates_id"] = str(row[field]).strip()
-                    break
-            
-            # Log row info
-            logger.info(f"Excel Row {idx+1}:")
-            for id_type, value in row_info["key_identifiers"].items():
-                logger.info(f"  - {id_type}: {value}")
-                
-            diagnostics["excel_rows"].append(row_info)
-        
-        # Calculate potential matches
-        for doc_idx, doc in enumerate(diagnostics["documents"]):
-            for row_idx, row in enumerate(diagnostics["excel_rows"]):
-                match_score = 0
-                match_reasons = []
-                
-                # Name matching
-                doc_name = doc["key_identifiers"].get("name")
-                row_name = row["key_identifiers"].get("name")
-                
-                if doc_name and row_name:
-                    # Calculate name similarity
-                    doc_words = set(doc_name.lower().split())
-                    row_words = set(row_name.lower().split())
-                    
-                    # Find common words
-                    common_words = doc_words.intersection(row_words)
-                    
-                    if common_words:
-                        # Calculate similarity percentage
-                        similarity = len(common_words) / max(len(doc_words), len(row_words))
-                        name_score = int(similarity * 50)  # Max 50 points for name matching
-                        match_score += name_score
-                        match_reasons.append(f"Name similarity: {similarity:.2f} ({', '.join(common_words)})")
-                
-                # Passport matching
-                doc_passport = doc["key_identifiers"].get("passport")
-                row_passport = row["key_identifiers"].get("passport")
-                
-                if doc_passport and row_passport:
-                    if doc_passport.lower() == row_passport.lower():
-                        match_score += 100
-                        match_reasons.append(f"Passport match: {doc_passport}")
-                
-                # Emirates ID matching
-                doc_eid = doc["key_identifiers"].get("emirates_id")
-                row_eid = row["key_identifiers"].get("emirates_id")
-                
-                if doc_eid and row_eid:
-                    # Clean both for comparison (remove spaces, hyphens)
-                    clean_doc_id = re.sub(r'[^0-9]', '', str(doc_eid))
-                    clean_row_id = re.sub(r'[^0-9]', '', str(row_eid))
-                    
-                    if clean_doc_id == clean_row_id:
-                        match_score += 100
-                        match_reasons.append(f"Emirates ID match: {doc_eid}")
-                
-                # Record match if score is high enough
-                if match_score >= 50:  # Threshold for considering a match
-                    match_info = {
-                        "document_index": doc_idx,
-                        "document_type": doc["type"],
-                        "row_index": row_idx,
-                        "score": match_score,
-                        "reasons": match_reasons
+                    doc_info = {
+                        "type": doc_type,
+                        "file_path": paths,
+                        "key_identifiers": {}
                     }
                     
-                    logger.info(f"MATCH: Document {doc['type']} with Row {row_idx+1}")
-                    logger.info(f"  - Score: {match_score}")
-                    for reason in match_reasons:
-                        logger.info(f"  - {reason}")
+                    # Extract key identifiers from document
+                    doc_data = {}
+                    if doc_type in extracted_data_by_document:
+                        doc_data = extracted_data_by_document[doc_type]
+                    
+                    # Add key identifiers
+                    for id_type, field_names in [
+                        ("name", ['full_name', 'name']), 
+                        ("passport", ['passport_number', 'passport_no']),
+                        ("emirates_id", ['emirates_id', 'eid'])
+                    ]:
+                        for field in field_names:
+                            if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
+                                doc_info["key_identifiers"][id_type] = doc_data[field]
+                                logger.info(f"  - {id_type}: {doc_data[field]}")
+                                break
+                    
+                    diagnostics["documents"].append(doc_info)
+                except Exception as e:
+                    logger.error(f"Error processing document path: {str(e)}")
+        
+        # Excel row information
+        try:
+            if isinstance(excel_data, list):
+                for idx, row in enumerate(excel_data):
+                    row_info = {
+                        "row_index": idx,
+                        "key_identifiers": {}
+                    }
+                    
+                    # Row name
+                    first_name = str(row.get('First Name', '')).strip()
+                    last_name = str(row.get('Last Name', '')).strip()
+                    row_name = f"{first_name} {last_name}".strip()
+                    if row_name:
+                        row_info["key_identifiers"]["name"] = row_name
                         
-                    diagnostics["matches"].append(match_info)
+                    # Passport number
+                    for field in ['passport_no', 'Passport No', 'PassportNo']:
+                        if field in row and row[field] and row[field] != self.DEFAULT_VALUE:
+                            row_info["key_identifiers"]["passport"] = str(row[field]).strip()
+                            break
+                            
+                    # Emirates ID
+                    for field in ['emirates_id', 'Emirates Id', 'EID']:
+                        if field in row and row[field] and row[field] != self.DEFAULT_VALUE:
+                            row_info["key_identifiers"]["emirates_id"] = str(row[field]).strip()
+                            break
+                    
+                    # Log row info
+                    logger.info(f"Excel Row {idx+1}:")
+                    for id_type, value in row_info["key_identifiers"].items():
+                        logger.info(f"  - {id_type}: {value}")
+                        
+                    diagnostics["excel_rows"].append(row_info)
+            elif isinstance(excel_data, pd.DataFrame):
+                for idx, row in excel_data.iterrows():
+                    row_dict = row.to_dict()
+                    row_info = {
+                        "row_index": idx,
+                        "key_identifiers": {}
+                    }
+                    
+                    # Row name
+                    first_name = str(row_dict.get('First Name', '')).strip()
+                    last_name = str(row_dict.get('Last Name', '')).strip()
+                    row_name = f"{first_name} {last_name}".strip()
+                    if row_name:
+                        row_info["key_identifiers"]["name"] = row_name
+                        
+                    # Passport number
+                    for field in ['passport_no', 'Passport No', 'PassportNo']:
+                        if field in row_dict and row_dict[field] and row_dict[field] != self.DEFAULT_VALUE:
+                            row_info["key_identifiers"]["passport"] = str(row_dict[field]).strip()
+                            break
+                            
+                    # Emirates ID
+                    for field in ['emirates_id', 'Emirates Id', 'EID']:
+                        if field in row_dict and row_dict[field] and row_dict[field] != self.DEFAULT_VALUE:
+                            row_info["key_identifiers"]["emirates_id"] = str(row_dict[field]).strip()
+                            break
+                    
+                    # Log row info
+                    logger.info(f"Excel Row {idx+1}:")
+                    for id_type, value in row_info["key_identifiers"].items():
+                        logger.info(f"  - {id_type}: {value}")
+                        
+                    diagnostics["excel_rows"].append(row_info)
+            else:
+                logger.warning(f"Unknown excel_data type: {type(excel_data)}")
+        except Exception as e:
+            logger.error(f"Error processing Excel rows: {str(e)}")
+        
+        # Calculate potential matches
+        try:
+            for doc_idx, doc in enumerate(diagnostics["documents"]):
+                for row_idx, row in enumerate(diagnostics["excel_rows"]):
+                    match_score = 0
+                    match_reasons = []
+                    
+                    # Name matching
+                    doc_name = doc["key_identifiers"].get("name")
+                    row_name = row["key_identifiers"].get("name")
+                    
+                    if doc_name and row_name:
+                        # Calculate name similarity
+                        doc_words = set(doc_name.lower().split())
+                        row_words = set(row_name.lower().split())
+                        
+                        # Find common words
+                        common_words = doc_words.intersection(row_words)
+                        
+                        if common_words:
+                            # Calculate similarity percentage
+                            similarity = len(common_words) / max(len(doc_words), len(row_words))
+                            name_score = int(similarity * 50)  # Max 50 points for name matching
+                            match_score += name_score
+                            match_reasons.append(f"Name similarity: {similarity:.2f} ({', '.join(common_words)})")
+                    
+                    # Passport matching
+                    doc_passport = doc["key_identifiers"].get("passport")
+                    row_passport = row["key_identifiers"].get("passport")
+                    
+                    if doc_passport and row_passport:
+                        if doc_passport.lower() == row_passport.lower():
+                            match_score += 100
+                            match_reasons.append(f"Passport match: {doc_passport}")
+                    
+                    # Emirates ID matching
+                    doc_eid = doc["key_identifiers"].get("emirates_id")
+                    row_eid = row["key_identifiers"].get("emirates_id")
+                    
+                    if doc_eid and row_eid:
+                        # Clean both for comparison (remove spaces, hyphens)
+                        clean_doc_id = re.sub(r'[^0-9]', '', str(doc_eid))
+                        clean_row_id = re.sub(r'[^0-9]', '', str(row_eid))
+                        
+                        if clean_doc_id == clean_row_id:
+                            match_score += 100
+                            match_reasons.append(f"Emirates ID match: {doc_eid}")
+                    
+                    # Record match if score is high enough
+                    if match_score >= 50:  # Threshold for considering a match
+                        match_info = {
+                            "document_index": doc_idx,
+                            "document_type": doc["type"],
+                            "row_index": row_idx,
+                            "score": match_score,
+                            "reasons": match_reasons
+                        }
+                        
+                        logger.info(f"MATCH: Document {doc['type']} with Row {row_idx+1}")
+                        logger.info(f"  - Score: {match_score}")
+                        for reason in match_reasons:
+                            logger.info(f"  - {reason}")
+                            
+                        diagnostics["matches"].append(match_info)
+        except Exception as e:
+            logger.error(f"Error calculating matches: {str(e)}")
         
         # Save diagnostics to file
         try:

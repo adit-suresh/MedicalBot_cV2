@@ -9,6 +9,8 @@ import re
 from openai import OpenAI
 import tempfile
 from PIL import Image
+import time
+import random
 
 from dotenv import load_dotenv
 import os
@@ -213,7 +215,7 @@ class GPTProcessor:
     @handle_errors(ErrorCategory.EXTERNAL_SERVICE, ErrorSeverity.MEDIUM)
     def process_document(self, file_path: str, doc_type: str) -> Dict[str, str]:
         """
-        Process a document with GPT-4o mini to extract structured data.
+        Process a document with GPT-4o mini to extract structured data with improved rate limit handling.
         
         Args:
             file_path: Path to the document file
@@ -225,6 +227,35 @@ class GPTProcessor:
         if not self.client:
             logger.warning("OpenAI client not available, cannot process document")
             return {"error": "OpenAI client not available"}
+        
+        # Use a class-level counter to track documents processed
+        if not hasattr(self.__class__, '_documents_processed'):
+            self.__class__._documents_processed = 0
+        if not hasattr(self.__class__, '_last_reset_time'):
+            self.__class__._last_reset_time = time.time()
+        
+        # Reset counter if more than a minute has passed
+        current_time = time.time()
+        if current_time - self.__class__._last_reset_time > 60:
+            self.__class__._documents_processed = 0
+            self.__class__._last_reset_time = current_time
+            
+        # Check if we've processed too many documents in the last minute
+        # GPT-4o mini has a rate limit of ~50 RPM for most accounts
+        if self.__class__._documents_processed >= 40:  # Conservative limit
+            # Calculate sleep time to avoid rate limits
+            sleep_time = max(1.0, 60 - (current_time - self.__class__._last_reset_time))
+            # Don't wait more than 3 seconds
+            sleep_time = min(sleep_time, 3.0)
+            if sleep_time > 0:
+                logger.info(f"Rate limit prevention: Waiting {sleep_time:.2f}s before processing more documents")
+                time.sleep(sleep_time)
+                # Reset counters after waiting
+                self.__class__._documents_processed = 0
+                self.__class__._last_reset_time = time.time()
+        
+        # Increment document counter
+        self.__class__._documents_processed += 1
         
         temp_file_created = False    
         try:
@@ -344,52 +375,79 @@ class GPTProcessor:
                 }
             ]
             
-            # Call the vision model API
+            # Call the vision model API with improved retry and rate limit handling
             logger.info(f"Calling GPT-4o mini API for {doc_type} document analysis")
-            try:
-                response = self.client.chat.completions.create(
-                    model=self.vision_model,
-                    messages=messages,
-                    max_tokens=1500,
-                    temperature=0.1  # Lower temperature for more deterministic outputs
-                )
-                
-                # Extract content
-                content = response.choices[0].message.content.strip()
-                logger.debug(f"OpenAI API response: {content}")
-                
-                # Try to parse as JSON
+            
+            # Define retry parameters with better backoff strategy
+            max_retries = 5
+            base_delay = 0.5  # 0.5 second base delay
+            
+            for attempt in range(max_retries):
                 try:
-                    # Extract JSON from response if it contains other text
-                    json_start = content.find('{')
-                    json_end = content.rfind('}') + 1
-                    if json_start >= 0 and json_end > json_start:
-                        json_str = content[json_start:json_end]
-                        extracted_data = json.loads(json_str)
-                    else:
-                        extracted_data = json.loads(content)
+                    # Add jitter to avoid thundering herd problem (all processes retrying at same time)
+                    jitter = random.uniform(0.1, 0.5)
                     
-                    # Process and standardize extracted data
-                    processed_data = self._post_process_extracted_data(extracted_data, doc_type)
+                    response = self.client.chat.completions.create(
+                        model=self.vision_model,
+                        messages=messages,
+                        max_tokens=1500,
+                        temperature=0.1  # Lower temperature for more deterministic outputs
+                    )
                     
-                    logger.info(f"Successfully extracted {len(processed_data)} fields from {doc_type}")
-                    return processed_data
+                    # Extract content - successful response, no need to retry
+                    content = response.choices[0].message.content.strip()
+                    logger.debug(f"OpenAI API response: {content}")
                     
-                except json.JSONDecodeError as e:
-                    logger.warning(f"Failed to parse GPT response as JSON: {str(e)}")
-                    logger.warning(f"Raw response: {content}")
+                    # Try to parse as JSON
+                    try:
+                        # Extract JSON from response if it contains other text
+                        json_start = content.find('{')
+                        json_end = content.rfind('}') + 1
+                        if json_start >= 0 and json_end > json_start:
+                            json_str = content[json_start:json_end]
+                            extracted_data = json.loads(json_str)
+                        else:
+                            extracted_data = json.loads(content)
+                        
+                        # Process and standardize extracted data
+                        processed_data = self._post_process_extracted_data(extracted_data, doc_type)
+                        
+                        logger.info(f"Successfully extracted {len(processed_data)} fields from {doc_type}")
+                        return processed_data
+                        
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to parse GPT response as JSON: {str(e)}")
+                        logger.warning(f"Raw response: {content}")
+                        
+                        # Try to extract fields with regex as fallback
+                        extracted_data = self._extract_with_regex(content, doc_type)
+                        if extracted_data:
+                            logger.info(f"Extracted {len(extracted_data)} fields using regex fallback")
+                            return extracted_data
+                        
+                        return {"error": "Failed to parse response", "raw_response": content}
                     
-                    # Try to extract fields with regex as fallback
-                    extracted_data = self._extract_with_regex(content, doc_type)
-                    if extracted_data:
-                        logger.info(f"Extracted {len(extracted_data)} fields using regex fallback")
-                        return extracted_data
+                except Exception as e:
+                    error_message = str(e)
                     
-                    return {"error": "Failed to parse response", "raw_response": content}
+                    # Check if it's a rate limit error
+                    if "rate_limit_exceeded" in error_message or "429" in error_message:
+                        # Calculate backoff time with exponential increase and jitter
+                        delay = base_delay * (2 ** attempt) + jitter
+                        logger.info(f"Rate limit reached. Retrying in {delay:.2f}s (attempt {attempt+1}/{max_retries})")
+                        time.sleep(delay)
+                        
+                        # Continue to next attempt if we haven't exhausted retries
+                        if attempt < max_retries - 1:
+                            continue
                     
-            except Exception as e:
-                logger.error(f"OpenAI API call failed: {str(e)}")
-                return {"error": f"API call failed: {str(e)}"}
+                    # Either not a rate limit error or we've exhausted retries
+                    logger.error(f"OpenAI API call failed: {str(e)}")
+                    return {"error": f"API call failed: {str(e)}"}
+            
+            # If we've exhausted all retries and still getting rate limit errors
+            logger.error(f"Failed to process document after {max_retries} retries due to rate limits")
+            return {"error": f"Rate limit exceeded after {max_retries} retries"}
             
         except Exception as e:
             logger.error(f"Error processing document with GPT-4o mini: {str(e)}")
@@ -399,7 +457,6 @@ class GPTProcessor:
             if temp_file_created and os.path.exists(processed_file):
                 try:
                     os.remove(processed_file)
-                    os.rmdir(os.path.dirname(processed_file))
                     logger.debug("Cleaned up temporary files")
                 except:
                     pass
