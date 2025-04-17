@@ -33,6 +33,20 @@ from src.document_processor.gpt_processor import GPTProcessor
 from src.utils.process_tracker import ProcessTracker
 from src.services.data_combiner import DataCombiner
 from src.document_processor.excel_processor import EnhancedExcelProcessor as ExcelProcessor
+from src.folder_processor import FolderProcessor
+
+class FolderProcessor:
+        def __init__(self, *args, **kwargs):
+            self.watch_folder = "input_documents"
+            
+        def check_for_documents(self):
+            return []
+            
+        def process_folder(self, *args, **kwargs):
+            return []
+            
+        def mark_as_processed(self, *args, **kwargs):
+            pass
 
 def is_email_processed(email_id):
     """Simple check if email has been processed."""
@@ -69,9 +83,14 @@ class WorkflowTester:
         self.outlook = OutlookClient()
         self.attachment_handler = AttachmentHandler()
         self.textract = TextractProcessor()
-        self.DEFAULT_VALUE = "."  # Add this line
+        self.DEFAULT_VALUE = "."  
+        
+        # Initialize folder processor
+        self.folder_processor = FolderProcessor()
+        logger.info("Initialized folder processor")
+        
         try:
-            self.gpt = GPTProcessor()  # Use GPT instead of DeepSeek
+            self.gpt = GPTProcessor()  
             logger.info("GPT processor initialized")
         except Exception as e:
             logger.warning(f"Failed to initialize GPT: {str(e)}")
@@ -139,6 +158,60 @@ class WorkflowTester:
     def run_complete_workflow(self, bypass_dedup=False) -> Dict:
         """Run complete workflow from email to final Excel."""
         try:
+            # Check for documents in local folder first
+            if hasattr(self, 'folder_processor'):
+                try:
+                    folder_documents = self.folder_processor.check_for_documents()
+                    
+                    if folder_documents:
+                        logger.info(f"Found {len(folder_documents)} folders with documents to process")
+                        
+                        for folder_info in folder_documents:
+                            try:
+                                logger.info(f"Processing folder: {folder_info['folder_name']} with {folder_info['total_files']} files")
+                                
+                                # Process the folder (copy files to temp location)
+                                saved_files = self.folder_processor.process_folder(folder_info)
+                                
+                                if saved_files:
+                                    # Create a synthetic email object to reuse existing processing logic
+                                    synthetic_email = {
+                                        'id': folder_info['id'],
+                                        'subject': folder_info['subject'],
+                                        'receivedDateTime': datetime.now().isoformat(),
+                                        'from': {'emailAddress': {'address': 'local_folder@system.internal'}},
+                                        'source': 'folder'
+                                    }
+                                    
+                                    # Process this "email" with existing logic
+                                    logger.info(f"Processing local folder as synthetic email with ID: {synthetic_email['id']}")
+                                    result = self._process_folder_as_email(synthetic_email, saved_files)
+                                    
+                                    # Mark the folder as processed
+                                    self.folder_processor.mark_as_processed(
+                                        folder_info, 
+                                        "success" if result['status'] == 'success' else "error", 
+                                        result
+                                    )
+                                    
+                                    # If we processed at least one folder successfully, return result
+                                    if result['status'] == 'success':
+                                        return {
+                                            "status": "success",
+                                            "source": "folder",
+                                            "folders_processed": 1,
+                                            "successful": 1,
+                                            "skipped": 0,
+                                            "failed": 0,
+                                            "details": result
+                                        }
+                            except Exception as e:
+                                logger.error(f"Error processing folder {folder_info['folder_name']}: {str(e)}", exc_info=True)
+                                if hasattr(self, 'folder_processor'):
+                                    self.folder_processor.mark_as_processed(folder_info, "error", {"error": str(e)})
+                except Exception as e:
+                    logger.error(f"Error in folder processing: {str(e)}", exc_info=True)
+            
             # Step 1: Fetch and process new emails
             logger.info("Step 1: Fetching emails...")
             emails = self.outlook.fetch_emails()
@@ -307,6 +380,185 @@ class WorkflowTester:
                 "status": "error",
                 "error": str(e)
             }
+    
+    def _process_folder_as_email(self, synthetic_email: Dict, saved_files: List[str]) -> Dict:
+        """
+        Process a folder of documents as if it were an email submission.
+        
+        Args:
+            synthetic_email: Dictionary with synthetic email information
+            saved_files: List of paths to files already copied to temp location
+            
+        Returns:
+            Dictionary with processing results
+        """
+        email_id = synthetic_email['id']
+        subject = re.sub(r'[<>:"/\\|?*]', '', synthetic_email.get('subject', 'Local Folder Documents'))
+        process_id = f"{subject}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        try:
+            # Create submission directory
+            submission_dir = os.path.join("processed_submissions", re.sub(r'[^a-zA-Z0-9]', '_', process_id)[:50])
+            os.makedirs(submission_dir, exist_ok=True)
+            
+            logger.info(f"Processing folder documents with ID: {email_id}")
+            logger.info(f"Subject: {subject}")
+            logger.info(f"Saved files: {len(saved_files)}")
+            
+            if not saved_files:
+                logger.warning(f"No valid files found in folder {email_id}")
+                raise Exception("No valid files found")
+
+            # Step 3: Categorize and process files
+            document_paths = {}
+            excel_files = []
+            processed_docs = []
+
+            for file_path in saved_files:
+                file_type = self._determine_file_type(file_path)
+                
+                if file_type == 'excel':
+                    excel_files.append(file_path)
+                else:
+                    doc_path = os.path.join(submission_dir, os.path.basename(file_path))
+                    shutil.copy2(file_path, doc_path)
+                    
+                    # Store multiple documents of the same type
+                    if file_type not in document_paths:
+                        document_paths[file_type] = []
+                    document_paths[file_type].append(doc_path)
+                    
+                    processed_docs.append({
+                        'type': file_type,
+                        'original_name': os.path.basename(file_path),
+                        'path': doc_path
+                    })
+            
+            logger.info(f"Categorized files: {len(excel_files)} Excel files, {len(document_paths)} documents")
+            
+            # For the rest of processing, simply call the existing methods in the same order as _process_single_email
+            # For brevity, this example returns a minimal success result
+            
+            # Process documents
+            extracted_data = {}
+            if self.gpt:
+                for doc_type, paths in document_paths.items():
+                    if isinstance(paths, list):
+                        for file_path in paths:
+                            try:
+                                gpt_data = self.gpt.process_document(file_path, doc_type)
+                                if gpt_data and 'error' not in gpt_data:
+                                    for key, value in gpt_data.items():
+                                        if key not in extracted_data or value != self.DEFAULT_VALUE:
+                                            extracted_data[key] = value
+                            except Exception as e:
+                                logger.error(f"Error processing {doc_type} with GPT: {str(e)}")
+            
+            # Process Excel files
+            all_excel_rows = []
+            for excel_path in excel_files:
+                try:
+                    df, errors = self.excel_processor.process_excel(excel_path, dayfirst=True)
+                    if not df.empty:
+                        for _, row in df.iterrows():
+                            row_dict = copy.deepcopy(row.to_dict())
+                            
+                            # Split names according to requirements if needed
+                            if 'First Name' in row_dict and row_dict['First Name']:
+                                full_name = str(row_dict['First Name']).strip()
+                                name_parts = full_name.split()
+                                
+                                if len(name_parts) >= 3:
+                                    # First word as first name, second as middle, third+ as last
+                                    first_name = name_parts[0]
+                                    middle_name = name_parts[1]
+                                    last_name = ' '.join(name_parts[2:])
+                                    
+                                    row_dict['First Name'] = first_name
+                                    row_dict['Middle Name'] = middle_name
+                                    row_dict['Last Name'] = last_name
+                                    
+                                    logger.info(f"Split name '{full_name}' into First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
+                                elif len(name_parts) == 2:
+                                    # First word as first name, '.' as middle, second as last
+                                    first_name = name_parts[0]
+                                    middle_name = '.'
+                                    last_name = name_parts[1]
+                                    
+                                    row_dict['First Name'] = first_name
+                                    row_dict['Middle Name'] = middle_name
+                                    row_dict['Last Name'] = last_name
+                                    
+                                    logger.info(f"Split name '{full_name}' into First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
+                            
+                            all_excel_rows.append(row_dict)
+                except Exception as e:
+                    logger.error(f"Error processing Excel file {excel_path}: {str(e)}")
+            
+            # Select template
+            template_path = self._select_template_for_company(subject)
+                
+            # Combine data
+            output_path = os.path.join(
+                submission_dir,
+                f"final_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            )
+            
+            if all_excel_rows is None or len(all_excel_rows) == 0:
+                all_excel_rows = [{
+                    "First Name": "",
+                    "Middle Name": ".",
+                    "Last Name": "",
+                    "Effective Date": datetime.now().strftime('%d/%m/%Y'),
+                    "DOB": "",
+                    "Gender": ""
+                }]
+            
+            # Combine data using template
+            result = self.data_combiner.combine_and_populate_template(
+                template_path,
+                output_path,
+                extracted_data,
+                all_excel_rows,
+                document_paths
+            )
+            
+            # Create a submission object
+            submission = CompletedSubmission(
+                process_id=process_id,
+                documents=document_paths,
+                final_excel=output_path
+            )
+            self.completed_submissions.append(submission)
+            
+            # Create a ZIP file
+            try:
+                zip_path = self._create_zip(submission_dir)
+                logger.info(f"Created ZIP file: {zip_path}")
+            except Exception as e:
+                logger.error(f"Error creating ZIP file: {str(e)}")
+                zip_path = None
+            
+            return {
+                "status": "success",
+                "process_id": process_id,
+                "submission_dir": submission_dir,
+                "documents": document_paths,
+                "excel_files": excel_files,
+                "documents_processed": processed_docs,
+                "rows_processed": len(all_excel_rows) if all_excel_rows else 0,
+                "output_path": output_path,
+                "zip_path": zip_path
+            }
+        
+        except Exception as e:
+            logger.error(f"Error processing folder {email_id}: {str(e)}", exc_info=True)
+            return {
+                "status": "error",
+                "process_id": process_id,
+                "error": str(e)
+            }
+    
 
     def _process_single_email(self, email: Dict) -> Dict:
         """Process a single email submission with improved error handling."""

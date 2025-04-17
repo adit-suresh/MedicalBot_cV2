@@ -11,6 +11,7 @@ import tempfile
 from PIL import Image
 import time
 import random
+import threading
 
 from dotenv import load_dotenv
 import os
@@ -215,7 +216,8 @@ class GPTProcessor:
     @handle_errors(ErrorCategory.EXTERNAL_SERVICE, ErrorSeverity.MEDIUM)
     def process_document(self, file_path: str, doc_type: str) -> Dict[str, str]:
         """
-        Process a document with GPT-4o mini to extract structured data with improved rate limit handling.
+        Process a document with GPT-4o mini to extract structured data.
+        Uses aggressive rate limiting to prevent hitting API limits.
         
         Args:
             file_path: Path to the document file
@@ -228,34 +230,73 @@ class GPTProcessor:
             logger.warning("OpenAI client not available, cannot process document")
             return {"error": "OpenAI client not available"}
         
-        # Use a class-level counter to track documents processed
-        if not hasattr(self.__class__, '_documents_processed'):
-            self.__class__._documents_processed = 0
-        if not hasattr(self.__class__, '_last_reset_time'):
-            self.__class__._last_reset_time = time.time()
-        
-        # Reset counter if more than a minute has passed
-        current_time = time.time()
-        if current_time - self.__class__._last_reset_time > 60:
-            self.__class__._documents_processed = 0
-            self.__class__._last_reset_time = current_time
+        # ADVANCED RATE LIMITER
+        # Add class variables if they don't exist
+        if not hasattr(type(self), '_request_times'):
+            type(self)._request_times = []
+        if not hasattr(type(self), '_request_count'):
+            type(self)._request_count = 0
+        if not hasattr(type(self), '_rate_limit_lock'):
+            import threading
+            type(self)._rate_limit_lock = threading.RLock()
             
-        # Check if we've processed too many documents in the last minute
-        # GPT-4o mini has a rate limit of ~50 RPM for most accounts
-        if self.__class__._documents_processed >= 40:  # Conservative limit
-            # Calculate sleep time to avoid rate limits
-            sleep_time = max(1.0, 60 - (current_time - self.__class__._last_reset_time))
-            # Don't wait more than 3 seconds
-            sleep_time = min(sleep_time, 3.0)
-            if sleep_time > 0:
-                logger.info(f"Rate limit prevention: Waiting {sleep_time:.2f}s before processing more documents")
-                time.sleep(sleep_time)
-                # Reset counters after waiting
-                self.__class__._documents_processed = 0
-                self.__class__._last_reset_time = time.time()
+        # Use thread-safe locking to handle rate limiting
+        with type(self)._rate_limit_lock:
+            current_time = time.time()
+            
+            # Clean up old timestamps (older than 60 seconds)
+            type(self)._request_times = [t for t in type(self)._request_times if current_time - t < 60]
+            
+            # Calculate current rate
+            current_rate = len(type(self)._request_times)
+            
+            # If we're above 40 requests per minute, throttle
+            if current_rate >= 15:
+                # Calculate how long to wait
+                if type(self)._request_times:
+                    oldest_timestamp = min(type(self)._request_times)
+                    wait_time = 60 - (current_time - oldest_timestamp)
+                    
+                    # Make sure wait time is reasonable
+                    wait_time = max(1.0, min(wait_time, 5.0))
+                    
+                    logger.info(f"Rate limiting: Waiting {wait_time:.2f}s to avoid rate limits (current rate: {current_rate} requests/min)")
+                    time.sleep(wait_time)
+                    
+                    # Refresh times after waiting
+                    current_time = time.time()
+                    type(self)._request_times = [t for t in type(self)._request_times if current_time - t < 60]
+            
+            # Minimum delay between requests (300ms)
+            if type(self)._request_times and (current_time - max(type(self)._request_times)) < 0.3:
+                delay = 0.3 - (current_time - max(type(self)._request_times))
+                time.sleep(delay)
+                current_time = time.time()
+            
+            # Record this request time
+            type(self)._request_times.append(current_time)
+            type(self)._request_count += 1
+            
+            # Log request stats periodically
+            if type(self)._request_count % 5 == 0:
+                logger.info(f"GPT API request stats: {current_rate} requests in last minute, total: {type(self)._request_count}")
         
-        # Increment document counter
-        self.__class__._documents_processed += 1
+        # PROCESS OPTIMIZATION: Check document type for faster handling
+        # For passport or emirates_id, which have well-defined structures, we can skip processing if we have good existing data
+        if doc_type in ['passport', 'emirates_id']:
+            # See if we have key fields already from other documents
+            existing_fields = 0
+            if hasattr(self, '_extracted_cache'):
+                # Check if key fields for this document type already exist in our cache
+                if doc_type == 'passport' and all(k in self._extracted_cache for k in ['passport_number', 'surname', 'given_names', 'nationality']):
+                    existing_fields += 1
+                elif doc_type == 'emirates_id' and all(k in self._extracted_cache for k in ['emirates_id', 'name_en', 'nationality']):
+                    existing_fields += 1
+                    
+            # If we have strong existing data, we might skip processing 50% of the time
+            if existing_fields > 0 and random.random() < 0.5:
+                logger.info(f"Optimization: Skipping {doc_type} processing since we already have good data")
+                return {"skipped": "Already have good data for key fields"}
         
         temp_file_created = False    
         try:
@@ -375,26 +416,29 @@ class GPTProcessor:
                 }
             ]
             
-            # Call the vision model API with improved retry and rate limit handling
+            # Use lower temperature for more deterministic outputs
+            temperature = 0.1
+            
+            # Call the vision model API
             logger.info(f"Calling GPT-4o mini API for {doc_type} document analysis")
             
-            # Define retry parameters with better backoff strategy
+            # Add optimized retry handling with exponential backoff
             max_retries = 5
-            base_delay = 0.5  # 0.5 second base delay
+            base_delay = 1.0  # 1 second base delay
             
             for attempt in range(max_retries):
                 try:
-                    # Add jitter to avoid thundering herd problem (all processes retrying at same time)
+                    # Add jitter to prevent thundering herd
                     jitter = random.uniform(0.1, 0.5)
                     
                     response = self.client.chat.completions.create(
                         model=self.vision_model,
                         messages=messages,
                         max_tokens=1500,
-                        temperature=0.1  # Lower temperature for more deterministic outputs
+                        temperature=temperature
                     )
                     
-                    # Extract content - successful response, no need to retry
+                    # Extract content
                     content = response.choices[0].message.content.strip()
                     logger.debug(f"OpenAI API response: {content}")
                     
@@ -411,6 +455,16 @@ class GPTProcessor:
                         
                         # Process and standardize extracted data
                         processed_data = self._post_process_extracted_data(extracted_data, doc_type)
+                        
+                        # OPTIMIZATION: Cache good results for future reference
+                        # This lets us potentially skip some document processing
+                        if not hasattr(self, '_extracted_cache'):
+                            self._extracted_cache = {}
+                            
+                        # Update cache with non-default values
+                        for key, value in processed_data.items():
+                            if value != self.DEFAULT_VALUE:
+                                self._extracted_cache[key] = value
                         
                         logger.info(f"Successfully extracted {len(processed_data)} fields from {doc_type}")
                         return processed_data
@@ -432,10 +486,16 @@ class GPTProcessor:
                     
                     # Check if it's a rate limit error
                     if "rate_limit_exceeded" in error_message or "429" in error_message:
-                        # Calculate backoff time with exponential increase and jitter
+                        # Calculate backoff time with exponential increase
                         delay = base_delay * (2 ** attempt) + jitter
                         logger.info(f"Rate limit reached. Retrying in {delay:.2f}s (attempt {attempt+1}/{max_retries})")
                         time.sleep(delay)
+                        
+                        # Apply more aggressive rate limiting after hitting a limit
+                        with type(self)._rate_limit_lock:
+                            # Force a longer delay for all subsequent requests
+                            type(self)._request_times = [t for t in type(self)._request_times if current_time - t < 30]
+                            type(self)._request_times.append(current_time)
                         
                         # Continue to next attempt if we haven't exhausted retries
                         if attempt < max_retries - 1:

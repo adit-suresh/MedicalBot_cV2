@@ -2,7 +2,7 @@
   "documents": [
     {
       "type": "visa",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27949_evisa.jpg",
+      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250417_171144\\27949_evisa.jpg",
       "key_identifiers": {
         "name": "FELIX PEDU",
         "passport": "B00216876"
@@ -10,7 +10,7 @@
     },
     {
       "type": "visa",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27950_evisa.jpg",
+      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250417_171144\\27950_evisa.jpg",
       "key_identifiers": {
         "name": "FELIX PEDU",
         "passport": "B00216876"
@@ -18,7 +18,7 @@
     },
     {
       "type": "visa",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27952_evisa.jpg",
+      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250417_171144\\27952_evisa.jpg",
       "key_identifiers": {
         "name": "FELIX PEDU",
         "passport": "B00216876"
@@ -26,7 +26,7 @@
     },
     {
       "type": "visa",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27953_OUTSIDE_VISA.pdf",
+      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250417_171144\\27953_OUTSIDE_VISA.pdf",
       "key_identifiers": {
         "name": "FELIX PEDU",
         "passport": "B00216876"
@@ -34,7 +34,7 @@
     },
     {
       "type": "visa",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27974_evisa.jpg",
+      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250417_171144\\27974_evisa.jpg",
       "key_identifiers": {
         "name": "FELIX PEDU",
         "passport": "B00216876"
@@ -42,7 +42,7 @@
     },
     {
       "type": "visa",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27975_evisa.jpg",
+      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250417_171144\\27975_evisa.jpg",
       "key_identifiers": {
         "name": "FELIX PEDU",
         "passport": "B00216876"
@@ -50,7 +50,7 @@
     },
     {
       "type": "visa",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27977_evisa.jpg",
+      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250417_171144\\27977_evisa.jpg",
       "key_identifiers": {
         "name": "FELIX PEDU",
         "passport": "B00216876"
@@ -58,7 +58,7 @@
     },
     {
       "type": "visa",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\28006_evisa.jpg",
+      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250417_171144\\28006_evisa.jpg",
       "key_identifiers": {
         "name": "FELIX PEDU",
         "passport": "B00216876"
@@ -66,7 +66,7 @@
     },
     {
       "type": "unknown",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27949_pp_es.jpg",
+      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250417_171144\\27949_pp.jpg",
       "key_identifiers": {
         "name": "PEDU FELIX",
         "passport": "B002168676"
@@ -74,7 +74,7 @@
     },
     {
       "type": "unknown",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27949_pp.jpg",
+      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250417_171144\\27950_pp.jpg",
       "key_identifiers": {
         "name": "PEDU FELIX",
         "passport": "B002168676"
@@ -82,7 +82,7 @@
     },
     {
       "type": "unknown",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27950_pp_es.jpg",
+      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250417_171144\\27952_pp.jpg",
       "key_identifiers": {
         "name": "PEDU FELIX",
         "passport": "B002168676"
@@ -90,7 +90,7 @@
     },
     {
       "type": "unknown",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27950_pp.jpg",
+      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250417_171144\\27953_002.jpg",
       "key_identifiers": {
         "name": "PEDU FELIX",
         "passport": "B002168676"
@@ -98,7 +98,7 @@
     },
     {
       "type": "unknown",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27952_pp_es.jpg",
+      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250417_171144\\27974_pp.jpg",
       "key_identifiers": {
         "name": "PEDU FELIX",
         "passport": "B002168676"
@@ -106,7 +106,7 @@
     },
     {
       "type": "unknown",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27952_pp.jpg",
+      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250417_171144\\27975_pp.jpg",
       "key_identifiers": {
         "name": "PEDU FELIX",
         "passport": "B002168676"
@@ -114,7 +114,7 @@
     },
     {
       "type": "unknown",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27953_002.jpg",
+      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250417_171144\\27977_pp.jpg",
       "key_identifiers": {
         "name": "PEDU FELIX",
         "passport": "B002168676"
@@ -122,71 +122,7 @@
     },
     {
       "type": "unknown",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27953_003.jpg",
-      "key_identifiers": {
-        "name": "PEDU FELIX",
-        "passport": "B002168676"
-      }
-    },
-    {
-      "type": "unknown",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27974_pp_es.jpg",
-      "key_identifiers": {
-        "name": "PEDU FELIX",
-        "passport": "B002168676"
-      }
-    },
-    {
-      "type": "unknown",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27974_pp.jpg",
-      "key_identifiers": {
-        "name": "PEDU FELIX",
-        "passport": "B002168676"
-      }
-    },
-    {
-      "type": "unknown",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27975_pp_es.jpg",
-      "key_identifiers": {
-        "name": "PEDU FELIX",
-        "passport": "B002168676"
-      }
-    },
-    {
-      "type": "unknown",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27975_pp.jpg",
-      "key_identifiers": {
-        "name": "PEDU FELIX",
-        "passport": "B002168676"
-      }
-    },
-    {
-      "type": "unknown",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27977_pp_es.jpg",
-      "key_identifiers": {
-        "name": "PEDU FELIX",
-        "passport": "B002168676"
-      }
-    },
-    {
-      "type": "unknown",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\27977_pp.jpg",
-      "key_identifiers": {
-        "name": "PEDU FELIX",
-        "passport": "B002168676"
-      }
-    },
-    {
-      "type": "unknown",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\28006_pp_es.jpg",
-      "key_identifiers": {
-        "name": "PEDU FELIX",
-        "passport": "B002168676"
-      }
-    },
-    {
-      "type": "unknown",
-      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250411_171304\\28006_pp.jpg",
+      "file_path": "processed_submissions\\Fw_Addition___NAS___Farnek__test_20250417_171144\\28006_pp.jpg",
       "key_identifiers": {
         "name": "PEDU FELIX",
         "passport": "B002168676"
@@ -397,78 +333,6 @@
     },
     {
       "document_index": 15,
-      "document_type": "unknown",
-      "row_index": 7,
-      "score": 50,
-      "reasons": [
-        "Name similarity: 1.00 (pedu, felix)"
-      ]
-    },
-    {
-      "document_index": 16,
-      "document_type": "unknown",
-      "row_index": 7,
-      "score": 50,
-      "reasons": [
-        "Name similarity: 1.00 (pedu, felix)"
-      ]
-    },
-    {
-      "document_index": 17,
-      "document_type": "unknown",
-      "row_index": 7,
-      "score": 50,
-      "reasons": [
-        "Name similarity: 1.00 (pedu, felix)"
-      ]
-    },
-    {
-      "document_index": 18,
-      "document_type": "unknown",
-      "row_index": 7,
-      "score": 50,
-      "reasons": [
-        "Name similarity: 1.00 (pedu, felix)"
-      ]
-    },
-    {
-      "document_index": 19,
-      "document_type": "unknown",
-      "row_index": 7,
-      "score": 50,
-      "reasons": [
-        "Name similarity: 1.00 (pedu, felix)"
-      ]
-    },
-    {
-      "document_index": 20,
-      "document_type": "unknown",
-      "row_index": 7,
-      "score": 50,
-      "reasons": [
-        "Name similarity: 1.00 (pedu, felix)"
-      ]
-    },
-    {
-      "document_index": 21,
-      "document_type": "unknown",
-      "row_index": 7,
-      "score": 50,
-      "reasons": [
-        "Name similarity: 1.00 (pedu, felix)"
-      ]
-    },
-    {
-      "document_index": 22,
-      "document_type": "unknown",
-      "row_index": 7,
-      "score": 50,
-      "reasons": [
-        "Name similarity: 1.00 (pedu, felix)"
-      ]
-    },
-    {
-      "document_index": 23,
       "document_type": "unknown",
       "row_index": 7,
       "score": 50,
