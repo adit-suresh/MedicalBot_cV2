@@ -36,17 +36,240 @@ from src.document_processor.excel_processor import EnhancedExcelProcessor as Exc
 from src.folder_processor import FolderProcessor
 
 class FolderProcessor:
-        def __init__(self, *args, **kwargs):
-            self.watch_folder = "input_documents"
+    def __init__(self, *args, **kwargs):
+        """Initialize folder processor with watch folder configuration."""
+        self.watch_folder = "input_documents"
+        self.processed_folders_file = "processed_folders.json"
+        
+        # Create the watch folder if it doesn't exist
+        os.makedirs(self.watch_folder, exist_ok=True)
+        
+        # Create a subfolder for your_documents if it doesn't exist
+        self.your_documents_folder = os.path.join(self.watch_folder, "your_documents")
+        os.makedirs(self.your_documents_folder, exist_ok=True)
+        
+        logger.info(f"FolderProcessor initialized with watch folder: {self.watch_folder}")
+        logger.info(f"Place documents in: {self.your_documents_folder}")
             
-        def check_for_documents(self):
+    def check_for_documents(self):
+        """
+        Check for new document folders in the input_documents/your_documents directory.
+        
+        Returns:
+            List of dictionaries with folder information for processing
+        """
+        try:
+            logger.info(f"Checking for documents in {self.your_documents_folder}")
+            
+            # Check if the directory exists
+            if not os.path.exists(self.your_documents_folder):
+                logger.warning(f"Directory does not exist: {self.your_documents_folder}")
+                return []
+                
+            # Get list of all subdirectories in the your_documents folder
+            # Each subdirectory is considered a separate submission
+            folders = []
+            
+            # First check immediate files in your_documents
+            files_in_root = [f for f in os.listdir(self.your_documents_folder) 
+                        if os.path.isfile(os.path.join(self.your_documents_folder, f))
+                        and not f.startswith('.')]
+                        
+            if files_in_root:
+                # If there are files directly in your_documents, treat as one submission
+                logger.info(f"Found {len(files_in_root)} files in root of your_documents")
+                folder_info = {
+                    'folder_name': 'your_documents',
+                    'folder_path': self.your_documents_folder,
+                    'is_root': True,
+                    'total_files': len(files_in_root),
+                    'files': files_in_root,
+                    'id': f"local_{datetime.now().strftime('%Y%m%d%H%M%S')}_{len(files_in_root)}",
+                    'subject': f"Local Submission - {len(files_in_root)} files - {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                }
+                
+                # Check if already processed
+                if not self._is_folder_processed(folder_info['id']):
+                    folders.append(folder_info)
+                else:
+                    logger.info(f"Skipping already processed root folder: {folder_info['id']}")
+            
+            # Then check subdirectories
+            subdirs = [d for d in os.listdir(self.your_documents_folder) 
+                    if os.path.isdir(os.path.join(self.your_documents_folder, d))
+                    and not d.startswith('.')]
+                    
+            for subdir in subdirs:
+                dir_path = os.path.join(self.your_documents_folder, subdir)
+                files = [f for f in os.listdir(dir_path) 
+                        if os.path.isfile(os.path.join(dir_path, f))
+                        and not f.startswith('.')]
+                        
+                if files:
+                    folder_info = {
+                        'folder_name': subdir,
+                        'folder_path': dir_path,
+                        'is_root': False,
+                        'total_files': len(files),
+                        'files': files,
+                        'id': f"local_{subdir}_{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                        'subject': f"Local Submission - {subdir} - {len(files)} files",
+                    }
+                    
+                    # Check if already processed
+                    if not self._is_folder_processed(folder_info['id']):
+                        folders.append(folder_info)
+                    else:
+                        logger.info(f"Skipping already processed subfolder: {folder_info['id']}")
+            
+            logger.info(f"Found {len(folders)} unprocessed folders/submissions")
+            return folders
+            
+        except Exception as e:
+            logger.error(f"Error checking for documents: {str(e)}", exc_info=True)
             return []
             
-        def process_folder(self, *args, **kwargs):
+    def process_folder(self, folder_info):
+        """
+        Process a folder by copying its files to a temporary location.
+        
+        Args:
+            folder_info: Dictionary with folder metadata
+            
+        Returns:
+            List of paths to copied files
+        """
+        try:
+            logger.info(f"Processing folder: {folder_info['folder_name']} with {folder_info['total_files']} files")
+            
+            # Create a temporary directory for this submission
+            temp_dir = os.path.join("temp_submissions", folder_info['id'])
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            saved_files = []
+            
+            # Copy all files to the temporary directory
+            for file_name in folder_info['files']:
+                if folder_info.get('is_root', False):
+                    source_path = os.path.join(self.your_documents_folder, file_name)
+                else:
+                    source_path = os.path.join(folder_info['folder_path'], file_name)
+                    
+                # Skip .DS_Store and other hidden files
+                if file_name.startswith('.'):
+                    continue
+                    
+                # Get file extension
+                _, ext = os.path.splitext(file_name)
+                
+                # Check if it's a valid file type
+                if ext.lower() not in ['.pdf', '.jpg', '.jpeg', '.png', '.xlsx', '.xls']:
+                    logger.warning(f"Skipping unsupported file type: {file_name}")
+                    continue
+                
+                # Copy file to temp directory
+                dest_path = os.path.join(temp_dir, file_name)
+                shutil.copy2(source_path, dest_path)
+                logger.info(f"Copied {file_name} to {temp_dir}")
+                
+                saved_files.append(dest_path)
+            
+            logger.info(f"Processed {len(saved_files)} files from folder {folder_info['folder_name']}")
+            return saved_files
+            
+        except Exception as e:
+            logger.error(f"Error processing folder {folder_info['folder_name']}: {str(e)}", exc_info=True)
             return []
             
-        def mark_as_processed(self, *args, **kwargs):
-            pass
+    def mark_as_processed(self, folder_info, status, result=None):
+        """
+        Mark a folder as processed to avoid reprocessing.
+        
+        Args:
+            folder_info: Dictionary with folder metadata
+            status: Processing status ('success' or 'error')
+            result: Optional result information
+        """
+        try:
+            # Load existing processed folders
+            processed_folders = {}
+            if os.path.exists(self.processed_folders_file):
+                try:
+                    with open(self.processed_folders_file, 'r') as f:
+                        processed_folders = json.load(f)
+                except json.JSONDecodeError:
+                    logger.error("Error parsing processed_folders.json, treating as empty")
+                    processed_folders = {}
+            
+            # Add this folder with processing information
+            processed_folders[folder_info['id']] = {
+                'folder_name': folder_info['folder_name'],
+                'folder_path': folder_info['folder_path'],
+                'total_files': folder_info['total_files'],
+                'status': status,
+                'processed_at': datetime.now().isoformat(),
+                'result': result
+            }
+            
+            # Save updated processed folders
+            with open(self.processed_folders_file, 'w') as f:
+                json.dump(processed_folders, f, indent=2)
+                
+            logger.info(f"Marked folder {folder_info['folder_name']} as {status}")
+            
+            # If successful, move files to a "processed" subdirectory
+            if status == 'success':
+                try:
+                    # Create processed subdirectory if it doesn't exist
+                    processed_dir = os.path.join(self.your_documents_folder, "processed")
+                    os.makedirs(processed_dir, exist_ok=True)
+                    
+                    # Create a subfolder for this specific submission
+                    submission_processed_dir = os.path.join(processed_dir, folder_info['id'])
+                    os.makedirs(submission_processed_dir, exist_ok=True)
+                    
+                    # Move or copy files to processed directory
+                    for file_name in folder_info['files']:
+                        if folder_info.get('is_root', False):
+                            source_path = os.path.join(self.your_documents_folder, file_name)
+                        else:
+                            source_path = os.path.join(folder_info['folder_path'], file_name)
+                            
+                        if os.path.exists(source_path):
+                            dest_path = os.path.join(submission_processed_dir, file_name)
+                            # Copy instead of move to avoid disrupting any ongoing processes
+                            shutil.copy2(source_path, dest_path)
+                            logger.info(f"Copied processed file to: {dest_path}")
+                    
+                    logger.info(f"Files for {folder_info['folder_name']} copied to processed directory")
+                except Exception as e:
+                    logger.error(f"Error copying files to processed directory: {str(e)}", exc_info=True)
+                    
+        except Exception as e:
+            logger.error(f"Error marking folder as processed: {str(e)}", exc_info=True)
+    
+    def _is_folder_processed(self, folder_id):
+        """
+        Check if a folder has already been processed.
+        
+        Args:
+            folder_id: Unique identifier for the folder
+            
+        Returns:
+            Boolean indicating if the folder has been processed
+        """
+        try:
+            # Load existing processed folders
+            if not os.path.exists(self.processed_folders_file):
+                return False
+                
+            with open(self.processed_folders_file, 'r') as f:
+                processed_folders = json.load(f)
+                
+            return folder_id in processed_folders
+        except Exception as e:
+            logger.error(f"Error checking if folder is processed: {str(e)}", exc_info=True)
+            return False
 
 def is_email_processed(email_id):
     """Simple check if email has been processed."""
@@ -154,6 +377,84 @@ class WorkflowTester:
         if missing:
             logger.warning(f"Missing templates: {', '.join(missing)}")
             logger.warning("Default template will be used for missing templates")
+            
+            
+    def _is_document_processed(self, file_path: str) -> bool:
+        """Check if a document has already been processed by computing a hash of the file."""
+        import hashlib
+        
+        # Generate a hash of the file content to uniquely identify it regardless of name
+        try:
+            with open(file_path, 'rb') as f:
+                file_hash = hashlib.md5(f.read()).hexdigest()
+                
+            processed_docs_file = "processed_documents.json"
+            processed_docs = {}
+            
+            # Load existing processed documents
+            if os.path.exists(processed_docs_file):
+                try:
+                    with open(processed_docs_file, 'r') as f:
+                        processed_docs = json.load(f)
+                except json.JSONDecodeError:
+                    logger.error("Error parsing processed_documents.json, treating as empty")
+                    # Create a backup of the corrupted file
+                    backup_name = f"processed_documents.json.corrupted.{int(time.time())}"
+                    shutil.copy2(processed_docs_file, backup_name)
+                    logger.info(f"Created backup of corrupted file: {backup_name}")
+                    
+                    # Create a new empty file
+                    with open(processed_docs_file, "w") as f_new:
+                        f_new.write("{}")
+                    processed_docs = {}
+                    
+            # Check if file hash exists in processed documents
+            if file_hash in processed_docs:
+                logger.info(f"Document already processed: {file_path} (hash: {file_hash})")
+                return True
+                
+            # Not processed yet
+            return False
+        except Exception as e:
+            logger.error(f"Error checking document processed status: {str(e)}")
+            # In case of error, assume not processed to be safe
+            return False
+
+    def _mark_document_processed(self, file_path: str) -> None:
+        """Mark a document as processed by saving its hash."""
+        import hashlib
+        
+        try:
+            # Generate a hash of the file content
+            with open(file_path, 'rb') as f:
+                file_hash = hashlib.md5(f.read()).hexdigest()
+                
+            processed_docs_file = "processed_documents.json"
+            processed_docs = {}
+            
+            # Load existing processed documents
+            if os.path.exists(processed_docs_file):
+                try:
+                    with open(processed_docs_file, 'r') as f:
+                        processed_docs = json.load(f)
+                except json.JSONDecodeError:
+                    logger.error("Error parsing processed_documents.json, treating as empty")
+                    processed_docs = {}
+            
+            # Add this document hash with file path and timestamp
+            processed_docs[file_hash] = {
+                "path": file_path,
+                "processed_at": datetime.now().isoformat(),
+                "file_name": os.path.basename(file_path)
+            }
+            
+            # Save updated processed documents
+            with open(processed_docs_file, 'w') as f:
+                json.dump(processed_docs, f, indent=2)
+                
+            logger.info(f"Marked document as processed: {file_path} (hash: {file_hash})")
+        except Exception as e:
+            logger.error(f"Error marking document as processed: {str(e)}")
            
     def run_complete_workflow(self, bypass_dedup=False) -> Dict:
         """Run complete workflow from email to final Excel."""
@@ -203,6 +504,7 @@ class WorkflowTester:
                                             "successful": 1,
                                             "skipped": 0,
                                             "failed": 0,
+                                            "emails_processed": 0,
                                             "details": result
                                         }
                             except Exception as e:
@@ -436,9 +738,6 @@ class WorkflowTester:
             
             logger.info(f"Categorized files: {len(excel_files)} Excel files, {len(document_paths)} documents")
             
-            # For the rest of processing, simply call the existing methods in the same order as _process_single_email
-            # For brevity, this example returns a minimal success result
-            
             # Process documents
             extracted_data = {}
             if self.gpt:
@@ -446,8 +745,25 @@ class WorkflowTester:
                     if isinstance(paths, list):
                         for file_path in paths:
                             try:
+                                # Check if document already processed
+                                if hasattr(self, '_is_document_processed') and self._is_document_processed(file_path):
+                                    logger.info(f"Skipping already processed document: {file_path}")
+                                    # Try to get cached data if available
+                                    if hasattr(self.gpt, '_extracted_cache'):
+                                        for key, value in self.gpt._extracted_cache.items():
+                                            if key not in extracted_data or value != self.DEFAULT_VALUE:
+                                                extracted_data[key] = value
+                                                logger.info(f"Using cached data for {key}: {value}")
+                                    continue
+                                
+                                # Process with GPT
                                 gpt_data = self.gpt.process_document(file_path, doc_type)
-                                if gpt_data and 'error' not in gpt_data:
+                                
+                                # Mark as processed if successful
+                                if gpt_data and 'error' not in gpt_data and hasattr(self, '_mark_document_processed'):
+                                    self._mark_document_processed(file_path)
+                                    
+                                    # Update extracted data with GPT results
                                     for key, value in gpt_data.items():
                                         if key not in extracted_data or value != self.DEFAULT_VALUE:
                                             extracted_data[key] = value
@@ -513,6 +829,17 @@ class WorkflowTester:
                     "DOB": "",
                     "Gender": ""
                 }]
+            
+            # Apply Emirates ID and nationality formatting
+            if 'emirates_id' in extracted_data:
+                # Check if we have the _process_emirates_id method in data_combiner
+                if hasattr(self.data_combiner, '_process_emirates_id'):
+                    extracted_data['emirates_id'] = self.data_combiner._process_emirates_id(extracted_data['emirates_id'])
+            
+            if 'nationality' in extracted_data:
+                # Check if we have the _standardize_nationality method in data_combiner
+                if hasattr(self.data_combiner, '_standardize_nationality'):
+                    extracted_data['nationality'] = self.data_combiner._standardize_nationality(extracted_data['nationality'])
             
             # Combine data using template
             result = self.data_combiner.combine_and_populate_template(
@@ -709,8 +1036,17 @@ class WorkflowTester:
                             # Handle list of paths (new structure)
                             for file_path in paths:
                                 try:
+                                    # Check if document already processed
+                                    if self._is_document_processed(file_path):
+                                        logger.info(f"Skipping already processed document: {file_path}")
+                                        continue
+                                        
                                     logger.info(f"Processing {doc_type} with GPT: {file_path}")
                                     gpt_data = self.gpt.process_document(file_path, doc_type)
+                                    
+                                    # Mark as processed if successful
+                                    if gpt_data and 'error' not in gpt_data:
+                                        self._mark_document_processed(file_path)
                                     
                                     # Check if GPT extraction was successful
                                     if gpt_data and 'error' not in gpt_data:
@@ -726,8 +1062,17 @@ class WorkflowTester:
                         else:
                             # Handle single path (old structure)
                             try:
+                                # Check if document already processed
+                                if self._is_document_processed(paths):
+                                    logger.info(f"Skipping already processed document: {paths}")
+                                    continue
+                                    
                                 logger.info(f"Processing {doc_type} with GPT: {paths}")
                                 gpt_data = self.gpt.process_document(paths, doc_type)
+                                
+                                # Mark as processed if successful
+                                if gpt_data and 'error' not in gpt_data:
+                                    self._mark_document_processed(paths)
                                 
                                 # Check if GPT extraction was successful
                                 if gpt_data and 'error' not in gpt_data:
@@ -817,11 +1162,20 @@ class WorkflowTester:
                         # Handle list of paths (new structure)
                         for file_path in paths:
                             try:
+                                # Check if document already processed
+                                if self._is_document_processed(file_path):
+                                    logger.info(f"Skipping already processed document: {file_path}")
+                                    continue
+                                    
                                 # Process with GPT first if available
                                 if self.gpt:
                                     try:
                                         doc_data = self.gpt.process_document(file_path, doc_type)
+                                        
+                                        # Mark as processed if successful
                                         if doc_data and 'error' not in doc_data:
+                                            self._mark_document_processed(file_path)
+                                            
                                             if doc_type not in doc_data_by_type:
                                                 doc_data_by_type[doc_type] = {}
                                             # Merge with existing data
@@ -830,9 +1184,11 @@ class WorkflowTester:
                                             continue
                                     except Exception as e:
                                         logger.warning(f"GPT extraction failed for {doc_type}, using Textract: {str(e)}")
-                                
+
                                 # Fallback to Textract
                                 doc_data = self.textract.process_document(file_path, doc_type)
+                                # Mark as processed after Textract (if not marked already by GPT)
+                                self._mark_document_processed(file_path)
                                 if doc_type not in doc_data_by_type:
                                     doc_data_by_type[doc_type] = {}
                                 # Merge with existing data
@@ -843,18 +1199,28 @@ class WorkflowTester:
                     else:
                         # Handle single path (old structure)
                         try:
+                            # Check if document already processed
+                            if self._is_document_processed(paths):
+                                logger.info(f"Skipping already processed document: {paths}")
+                                continue
+                                
                             # Process with GPT first if available
                             if self.gpt:
                                 try:
                                     doc_data = self.gpt.process_document(paths, doc_type)
+                                    
+                                    # Mark as processed if successful
                                     if doc_data and 'error' not in doc_data:
+                                        self._mark_document_processed(paths)
                                         doc_data_by_type[doc_type] = doc_data
                                         continue
                                 except Exception as e:
                                     logger.warning(f"GPT extraction failed for {doc_type}, using Textract: {str(e)}")
-                            
+
                             # Fallback to Textract
                             doc_data = self.textract.process_document(paths, doc_type)
+                            # Mark as processed after Textract (if not marked already by GPT)
+                            self._mark_document_processed(paths)
                             doc_data_by_type[doc_type] = doc_data
                         except Exception as e:
                             logger.error(f"Error processing {doc_type} document: {str(e)}")
@@ -869,11 +1235,19 @@ class WorkflowTester:
                         # Handle list of paths (new structure)
                         for file_path in paths:
                             try:
+                                # Check if document already processed
+                                if self._is_document_processed(file_path):
+                                    logger.info(f"Skipping already processed document: {file_path}")
+                                    continue
+                                    
                                 # Process with GPT first if available (prioritize GPT as mentioned)
                                 if self.gpt:
                                     try:
                                         doc_data = self.gpt.process_document(file_path, doc_type)
                                         if doc_data and 'error' not in doc_data:
+                                            # Mark as processed if successful
+                                            self._mark_document_processed(file_path)
+                                            
                                             if doc_type not in doc_data_by_type:
                                                 doc_data_by_type[doc_type] = {}
                                             # Merge with existing data
@@ -883,9 +1257,11 @@ class WorkflowTester:
                                             continue  # Skip Textract if GPT succeeded
                                     except Exception as e:
                                         logger.warning(f"GPT extraction failed for {doc_type}, using Textract: {str(e)}")
-                                
+
                                 # Fallback to Textract
                                 doc_data = self.textract.process_document(file_path, doc_type)
+                                # Mark as processed after Textract (if not marked already by GPT)
+                                self._mark_document_processed(file_path)
                                 if doc_type not in doc_data_by_type:
                                     doc_data_by_type[doc_type] = {}
                                 # Merge with existing data
@@ -897,19 +1273,29 @@ class WorkflowTester:
                     else:
                         # Handle single path (old structure)
                         try:
+                            # Check if document already processed
+                            if self._is_document_processed(paths):
+                                logger.info(f"Skipping already processed document: {paths}")
+                                continue
+                                
                             # Process with GPT first if available (prioritize GPT as mentioned)
                             if self.gpt:
                                 try:
                                     doc_data = self.gpt.process_document(paths, doc_type)
                                     if doc_data and 'error' not in doc_data:
+                                        # Mark as processed if successful
+                                        self._mark_document_processed(paths)
+                                        
                                         doc_data_by_type[doc_type] = doc_data
                                         logger.info(f"GPT successfully extracted data from {doc_type}")
                                         continue  # Skip Textract if GPT succeeded
                                 except Exception as e:
                                     logger.warning(f"GPT extraction failed for {doc_type}, using Textract: {str(e)}")
-                            
+
                             # Fallback to Textract
                             doc_data = self.textract.process_document(paths, doc_type)
+                            # Mark as processed after Textract (if not marked already by GPT)
+                            self._mark_document_processed(paths)
                             doc_data_by_type[doc_type] = doc_data
                             logger.info(f"Textract extracted data from {doc_type}")
                         except Exception as e:
@@ -1134,8 +1520,16 @@ class WorkflowTester:
                                         # Handle list of paths (new structure)
                                         for file_path in paths:
                                             try:
+                                                # Check if document already processed
+                                                if self._is_document_processed(file_path):
+                                                    logger.info(f"Skipping already processed document: {file_path}")
+                                                    continue
+                                                    
                                                 logger.info(f"Force processing {doc_type} with Textract: {file_path}")
                                                 textract_data = self.textract.process_document(file_path, doc_type)
+                                                
+                                                # Mark as processed after Textract
+                                                self._mark_document_processed(file_path)
                                                 if doc_type not in doc_data_by_type:
                                                     doc_data_by_type[doc_type] = {}
                                                 # Merge with existing data
@@ -1151,8 +1545,16 @@ class WorkflowTester:
                                     else:
                                         # Handle single path (old structure)
                                         try:
+                                            # Check if document already processed
+                                            if self._is_document_processed(paths):
+                                                logger.info(f"Skipping already processed document: {paths}")
+                                                continue
+                                                
                                             logger.info(f"Force processing {doc_type} with Textract: {paths}")
                                             textract_data = self.textract.process_document(paths, doc_type)
+                                            
+                                            # Mark as processed after Textract
+                                            self._mark_document_processed(paths)
                                             doc_data_by_type[doc_type] = textract_data
                                             
                                             # Update the combined extracted data
@@ -1200,12 +1602,8 @@ class WorkflowTester:
 
             # Rename client files based on Excel data
             if all_excel_rows:
-                try:
-                    document_paths = self._rename_client_files(document_paths, all_excel_rows)
-                except Exception as e:
-                    logger.error(f"Error renaming client files: {str(e)}", exc_info=True)
-                    # Continue without failing the whole process
-                    logger.warning("Continuing with original filenames")
+                # document_paths = self._rename_client_files(document_paths, all_excel_rows)
+                logger.info("Skipping file renaming to avoid duplicate processing")
 
             # Step 6: Select template based on company in subject
             template_path = self._select_template_for_company(subject)
@@ -1883,8 +2281,16 @@ class WorkflowTester:
                 # Handle list of paths (new structure)
                 for file_path in paths:
                     try:
+                        # Check if document already processed
+                        if self._is_document_processed(file_path):
+                            logger.info(f"Skipping already processed document: {file_path}")
+                            continue
+                            
                         # Process document to extract data
                         doc_data = self.textract.process_document(file_path, doc_type)
+
+                        # Mark as processed
+                        self._mark_document_processed(file_path)
                         
                         # Look for name in extracted data
                         extracted_name = None
@@ -1918,8 +2324,16 @@ class WorkflowTester:
             else:
                 # Handle single path (old structure)
                 try:
+                    # Check if document already processed
+                    if self._is_document_processed(file_path):
+                        logger.info(f"Skipping already processed document: {file_path}")
+                        continue
+                        
                     # Process document to extract data
-                    doc_data = self.textract.process_document(paths, doc_type)
+                    doc_data = self.textract.process_document(file_path, doc_type)
+
+                    # Mark as processed
+                    self._mark_document_processed(file_path)
                     
                     # Look for name in extracted data
                     extracted_name = None
@@ -2918,7 +3332,12 @@ def run_test(reset=False):
     logger.info("WORKFLOW TEST COMPLETED")
     
     if result['status'] == 'success':
-        logger.info(f"Successfully processed {result['successful']} out of {result['emails_processed']} emails")
+        # Handle different sources (email or folder)
+        if result.get('source') == 'folder':
+            logger.info(f"Successfully processed {result['successful']} folders")
+        else:
+            # Default to email processing
+            logger.info(f"Successfully processed {result['successful']} out of {result.get('emails_processed', 0)} emails")
         
         # Show completed submissions
         submissions = tester.get_completed_submissions()

@@ -72,3 +72,6 @@ processed_submissions/
 diagnostic_log.txt
 processed_emails.json
 document_matches.json
+
+temp_submissions
+input_documents

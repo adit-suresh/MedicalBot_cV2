@@ -201,16 +201,22 @@ class GPTProcessor:
         Returns:
             Formatted Emirates ID
         """
-        if not eid or eid == self.DEFAULT_VALUE:
-            return self.DEFAULT_VALUE
-            
-        # Remove non-digits
-        digits = re.sub(r'\D', '', eid)
+        # Remove non-digits and non-hyphens
+        digits_only = re.sub(r'[^0-9]', '', str(eid))
         
         # Check if we have the right number of digits
-        if len(digits) == 15:
-            return f"{digits[:3]}-{digits[3:7]}-{digits[7:14]}-{digits[14]}"
+        if len(digits_only) == 15:
+            formatted = f"{digits_only[:3]}-{digits_only[3:7]}-{digits_only[7:14]}-{digits_only[14]}"
+            logger.info(f"Formatted Emirates ID with hyphens: {formatted}")
+            return formatted
+        # If it has fewer digits, it might be missing the check digit
+        elif len(digits_only) == 14:
+            # Assume last digit is missing, add a placeholder
+            formatted = f"{digits_only[:3]}-{digits_only[3:7]}-{digits_only[7:14]}-1"
+            logger.warning(f"Emirates ID missing check digit, added placeholder: {formatted}")
+            return formatted
         
+        # If the format is completely off, return original
         return eid
     
     @handle_errors(ErrorCategory.EXTERNAL_SERVICE, ErrorSeverity.MEDIUM)

@@ -1,0 +1,178 @@
+{
+  "local_20250417214303_11": {
+    "folder_name": "your_documents",
+    "folder_path": "input_documents\\your_documents",
+    "total_files": 11,
+    "status": "success",
+    "processed_at": "2025-04-17T21:43:43.849695",
+    "result": {
+      "status": "success",
+      "process_id": "Local Submission - 11 files - 2025-04-17 2143_20250417_214303",
+      "submission_dir": "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025",
+      "documents": {
+        "emirates_id": [
+          "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Amar EID.jpeg",
+          "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Asel Eid Copy.jpeg",
+          "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Kewal EID.jpeg"
+        ],
+        "visa": [
+          "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Amar Golden Visa Copy.jpeg",
+          "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Asel Golden Visa Copy.jpeg",
+          "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Kewal Golden Visa Copy .jpeg"
+        ],
+        "unknown": [
+          "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Amar PP Copy.jpeg",
+          "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Asel PP Copy.jpeg",
+          "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Consultancy Agreement-Kewal Mehta.pdf",
+          "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Kewal PP Copy.jpeg"
+        ]
+      },
+      "excel_files": [
+        "temp_submissions\\local_20250417214303_11\\NASHRRequestTemplateNew - 2025-04-09T211926.411.xlsx"
+      ],
+      "documents_processed": [
+        {
+          "type": "emirates_id",
+          "original_name": "Amar EID.jpeg",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Amar EID.jpeg"
+        },
+        {
+          "type": "visa",
+          "original_name": "Amar Golden Visa Copy.jpeg",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Amar Golden Visa Copy.jpeg"
+        },
+        {
+          "type": "unknown",
+          "original_name": "Amar PP Copy.jpeg",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Amar PP Copy.jpeg"
+        },
+        {
+          "type": "emirates_id",
+          "original_name": "Asel Eid Copy.jpeg",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Asel Eid Copy.jpeg"
+        },
+        {
+          "type": "visa",
+          "original_name": "Asel Golden Visa Copy.jpeg",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Asel Golden Visa Copy.jpeg"
+        },
+        {
+          "type": "unknown",
+          "original_name": "Asel PP Copy.jpeg",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Asel PP Copy.jpeg"
+        },
+        {
+          "type": "unknown",
+          "original_name": "Consultancy Agreement-Kewal Mehta.pdf",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Consultancy Agreement-Kewal Mehta.pdf"
+        },
+        {
+          "type": "emirates_id",
+          "original_name": "Kewal EID.jpeg",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Kewal EID.jpeg"
+        },
+        {
+          "type": "visa",
+          "original_name": "Kewal Golden Visa Copy .jpeg",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Kewal Golden Visa Copy .jpeg"
+        },
+        {
+          "type": "unknown",
+          "original_name": "Kewal PP Copy.jpeg",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\Kewal PP Copy.jpeg"
+        }
+      ],
+      "rows_processed": 3,
+      "output_path": "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025\\final_data_20250417_214303.xlsx",
+      "zip_path": "processed_submissions\\Local_Submission___11_files___2025_04_17_2143_2025_20250417_214343.zip"
+    }
+  },
+  "local_20250418003034_11": {
+    "folder_name": "your_documents",
+    "folder_path": "input_documents\\your_documents",
+    "total_files": 11,
+    "status": "success",
+    "processed_at": "2025-04-18T00:31:24.246895",
+    "result": {
+      "status": "success",
+      "process_id": "Local Submission - 11 files - 2025-04-18 0030_20250418_003034",
+      "submission_dir": "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025",
+      "documents": {
+        "emirates_id": [
+          "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Amar EID.jpeg",
+          "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Asel Eid Copy.jpeg",
+          "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Kewal EID.jpeg"
+        ],
+        "visa": [
+          "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Amar Golden Visa Copy.jpeg",
+          "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Asel Golden Visa Copy.jpeg",
+          "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Kewal Golden Visa Copy .jpeg"
+        ],
+        "unknown": [
+          "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Amar PP Copy.jpeg",
+          "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Asel PP Copy.jpeg",
+          "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Consultancy Agreement-Kewal Mehta.pdf",
+          "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Kewal PP Copy.jpeg"
+        ]
+      },
+      "excel_files": [
+        "temp_submissions\\local_20250418003034_11\\NASHRRequestTemplateNew - 2025-04-09T211926.411.xlsx"
+      ],
+      "documents_processed": [
+        {
+          "type": "emirates_id",
+          "original_name": "Amar EID.jpeg",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Amar EID.jpeg"
+        },
+        {
+          "type": "visa",
+          "original_name": "Amar Golden Visa Copy.jpeg",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Amar Golden Visa Copy.jpeg"
+        },
+        {
+          "type": "unknown",
+          "original_name": "Amar PP Copy.jpeg",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Amar PP Copy.jpeg"
+        },
+        {
+          "type": "emirates_id",
+          "original_name": "Asel Eid Copy.jpeg",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Asel Eid Copy.jpeg"
+        },
+        {
+          "type": "visa",
+          "original_name": "Asel Golden Visa Copy.jpeg",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Asel Golden Visa Copy.jpeg"
+        },
+        {
+          "type": "unknown",
+          "original_name": "Asel PP Copy.jpeg",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Asel PP Copy.jpeg"
+        },
+        {
+          "type": "unknown",
+          "original_name": "Consultancy Agreement-Kewal Mehta.pdf",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Consultancy Agreement-Kewal Mehta.pdf"
+        },
+        {
+          "type": "emirates_id",
+          "original_name": "Kewal EID.jpeg",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Kewal EID.jpeg"
+        },
+        {
+          "type": "visa",
+          "original_name": "Kewal Golden Visa Copy .jpeg",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Kewal Golden Visa Copy .jpeg"
+        },
+        {
+          "type": "unknown",
+          "original_name": "Kewal PP Copy.jpeg",
+          "path": "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\Kewal PP Copy.jpeg"
+        }
+      ],
+      "rows_processed": 3,
+      "output_path": "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025\\final_data_20250418_003034.xlsx",
+      "zip_path": "processed_submissions\\Local_Submission___11_files___2025_04_18_0030_2025_20250418_003124.zip"
+    }
+  }
+}
