@@ -371,10 +371,10 @@ class GPTProcessor:
             elif doc_type == 'visa':
                 extraction_prompt = """
                 Extract the following information from this visa/residence permit:
-                - entry_permit_no: The entry permit number
-                - unified_no: The unified number (may be labeled as "U.I.D No") (typically a 10-digit number without slashes)
+                - entry_permit_no: The entry permit number (very important - look for "Entry Permit No", "File", "File No.")
+                - unified_no: The unified number (very important - look for "U.I.D No", "U.I.D", "UID", "Unified Number")
                 - file: The file number (may be labeled as "File" or "File No.")
-                - visa_file_number: The visa file number (should start with 10 or 20, often in format XXX/YYYY/ZZZZZ with slashes, always starts with XXX/YYYY/...)
+                - visa_file_number: The visa file number (should start with 10 or 20, often in format XXX/YYYY/ZZZZZ)
                 - full_name: The person's full name
                 - nationality: The person's nationality
                 - passport_number: The passport number
@@ -386,13 +386,13 @@ class GPTProcessor:
                 - sponsor_name: The sponsor's name (employer)
                 
                 Pay special attention to accurately extracting:
-                1. The file number (labeled "File" or "File No.")
-                2. The unified number (typically a 10-digit number WITHOUT slashes)
+                1. The entry permit number - this is critical (may appear as "Entry Permit No", "File", or "File No.")
+                2. The unified number - this is critical (typically a 10-digit number WITHOUT slashes)
                 3. The full name
                 4. The passport number
-                5. Gender (report as "Male" or "Female", not as "M" or "F")
                 
-                Visa file number should typically start with '10' or '20'. If you see a "File" field with a value starting with these digits, extract it as visa_file_number.
+                Note that the entry permit number and visa file number might be the same in some documents, and different in others.
+                The unified number is typically a 10-digit number WITHOUT slashes and often appears near "U.I.D No".
                 
                 Return ONLY a clean JSON object with these exact field names. Use "." for any missing fields.
                 """
@@ -626,6 +626,27 @@ class GPTProcessor:
                 processed['unified_no'] = visa_file
                 processed['visa_file_number'] = unified
                 logger.info("Swapped unified_no and visa_file_number as they appeared to be mixed up")
+                
+        # Improve visa-related field extraction
+        if doc_type == 'visa':
+            # If we have entry_permit_no but no visa_file_number, copy it
+            if 'entry_permit_no' in processed and processed['entry_permit_no'] != self.DEFAULT_VALUE:
+                if 'visa_file_number' not in processed or processed['visa_file_number'] == self.DEFAULT_VALUE:
+                    processed['visa_file_number'] = processed['entry_permit_no']
+                    logger.info(f"Set visa_file_number from entry_permit_no: {processed['entry_permit_no']}")
+            
+            # If we have file_no or file field, use it for visa_file_number
+            for field in ['file_no', 'file', 'file_number']:
+                if field in processed and processed[field] != self.DEFAULT_VALUE:
+                    if 'visa_file_number' not in processed or processed['visa_file_number'] == self.DEFAULT_VALUE:
+                        processed['visa_file_number'] = processed[field]
+                        logger.info(f"Set visa_file_number from {field}: {processed[field]}")
+            
+            # Look for unified_no in various field names
+            for field in ['unified_no', 'uid', 'u.i.d._no.', 'unified_number', 'unified']:
+                if field in processed and processed[field] != self.DEFAULT_VALUE:
+                    processed['unified_no'] = processed[field]
+                    logger.info(f"Set unified_no from {field}: {processed[field]}")
         
         return processed
 

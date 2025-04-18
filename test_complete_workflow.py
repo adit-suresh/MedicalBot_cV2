@@ -859,12 +859,74 @@ class WorkflowTester:
             self.completed_submissions.append(submission)
             
             # Create a ZIP file
+            zip_path = None
             try:
                 zip_path = self._create_zip(submission_dir)
                 logger.info(f"Created ZIP file: {zip_path}")
             except Exception as e:
                 logger.error(f"Error creating ZIP file: {str(e)}")
-                zip_path = None
+                
+            # Send email notification with results - ADDED EMAIL SENDING FUNCTIONALITY
+            try:
+                # Prepare email content
+                email_subject = f"Medical Bot: Local Folder Submission - {subject} - Complete"
+                
+                email_body = f"""
+                Dear Team,
+                
+                The Medical Bot has completed processing a local folder submission.
+                
+                Details:
+                - Subject: {subject}
+                - Files Processed: {len(saved_files)}
+                - Documents: {list(document_paths.keys())}
+                - Excel Files: {[os.path.basename(f) for f in excel_files]}
+                - Rows Processed: {len(all_excel_rows) if all_excel_rows else 0}
+                
+                The processed files are attached as a ZIP archive.
+                They are also available locally at: {submission_dir}
+                
+                Regards,
+                Medical Bot
+                """
+                
+                # Check if we have email sender
+                if hasattr(self, 'email_sender') and self.email_sender:
+                    try:
+                        # Send email with ZIP attachment if available
+                        if zip_path and os.path.exists(zip_path):
+                            email_sent = self.email_sender.send_email(
+                                subject=email_subject,
+                                body=email_body,
+                                attachment_path=zip_path
+                            )
+                        else:
+                            # Send without attachment
+                            email_sent = self.email_sender.send_email(
+                                subject=email_subject,
+                                body=email_body
+                            )
+                        
+                        if email_sent:
+                            logger.info("Email notification sent successfully for local folder submission")
+                        else:
+                            logger.warning("Failed to send email notification for local folder submission")
+                    except Exception as e:
+                        logger.error(f"Error sending email for local folder: {str(e)}", exc_info=True)
+                else:
+                    logger.warning("Email sender not available, skipping notification email")
+                    
+                # Also try sending via Teams if available
+                if hasattr(self, 'teams_notifier') and self.teams_notifier:
+                    try:
+                        teams_message = f"🔔 Local folder submission processed: {subject} - {len(saved_files)} files, {len(all_excel_rows)} rows"
+                        self.teams_notifier.send_notification(teams_message)
+                        logger.info("Teams notification sent for local folder submission")
+                    except Exception as e:
+                        logger.error(f"Error sending Teams notification: {str(e)}")
+                    
+            except Exception as e:
+                logger.error(f"Error sending notifications: {str(e)}", exc_info=True)
             
             return {
                 "status": "success",

@@ -202,9 +202,9 @@ class DataCombiner:
                             logger.warning("Excel data is an empty list, using default DataFrame")
                             # Create a default DataFrame with basic structure for testing
                             excel_data = pd.DataFrame([
-                                {"First Name": "Row 1", "Middle Name": ".", "Last Name": "Default", "Contract Name": "GOLDEN BEE FOODS RESTAURANT LLC (Dubai) - NLSB"},
-                                {"First Name": "Row 2", "Middle Name": ".", "Last Name": "Default", "Contract Name": "GOLDEN BEE FOODS RESTAURANT LLC (Dubai) - NLSB"},
-                                {"First Name": "Row 3", "Middle Name": ".", "Last Name": "Default", "Contract Name": "GOLDEN BEE FOODS RESTAURANT LLC (Dubai) - NLSB"}
+                                {"First Name": "Row 1", "Middle Name": ".", "Last Name": "Default", "Contract Name": " "},
+                                {"First Name": "Row 2", "Middle Name": ".", "Last Name": "Default", "Contract Name": " "},
+                                {"First Name": "Row 3", "Middle Name": ".", "Last Name": "Default", "Contract Name": " "}
                             ])
                         else:
                             # Convert list to DataFrame
@@ -215,26 +215,26 @@ class DataCombiner:
                         logger.warning(f"Excel data has invalid type {type(excel_data)}, using default DataFrame")
                         # Create a default DataFrame with basic structure for testing
                         excel_data = pd.DataFrame([
-                            {"First Name": "Row 1", "Middle Name": ".", "Last Name": "Default", "Contract Name": "GOLDEN BEE FOODS RESTAURANT LLC (Dubai) - NLSB"},
-                            {"First Name": "Row 2", "Middle Name": ".", "Last Name": "Default", "Contract Name": "GOLDEN BEE FOODS RESTAURANT LLC (Dubai) - NLSB"},
-                            {"First Name": "Row 3", "Middle Name": ".", "Last Name": "Default", "Contract Name": "GOLDEN BEE FOODS RESTAURANT LLC (Dubai) - NLSB"}
+                            {"First Name": "Row 1", "Middle Name": ".", "Last Name": "Default", "Contract Name": ""},
+                            {"First Name": "Row 2", "Middle Name": ".", "Last Name": "Default", "Contract Name": ""},
+                            {"First Name": "Row 3", "Middle Name": ".", "Last Name": "Default", "Contract Name": ""}
                         ])
                 else:
                     # None value
                     logger.info("Excel data is None, using default DataFrame")
                     # Create a default DataFrame with basic structure for testing
                     excel_data = pd.DataFrame([
-                        {"First Name": "Row 1", "Middle Name": ".", "Last Name": "Default", "Contract Name": "GOLDEN BEE FOODS RESTAURANT LLC (Dubai) - NLSB"},
-                        {"First Name": "Row 2", "Middle Name": ".", "Last Name": "Default", "Contract Name": "GOLDEN BEE FOODS RESTAURANT LLC (Dubai) - NLSB"},
-                        {"First Name": "Row 3", "Middle Name": ".", "Last Name": "Default", "Contract Name": "GOLDEN BEE FOODS RESTAURANT LLC (Dubai) - NLSB"}
+                        {"First Name": "Row 1", "Middle Name": ".", "Last Name": "Default", "Contract Name": ""},
+                        {"First Name": "Row 2", "Middle Name": ".", "Last Name": "Default", "Contract Name": ""},
+                        {"First Name": "Row 3", "Middle Name": ".", "Last Name": "Default", "Contract Name": ""}
                     ])
             except Exception as e:
                 logger.error(f"Error processing excel_data: {str(e)}", exc_info=True)
                 # Create a default DataFrame with basic structure for testing
                 excel_data = pd.DataFrame([
-                    {"First Name": "Row 1", "Middle Name": ".", "Last Name": "Default", "Contract Name": "GOLDEN BEE FOODS RESTAURANT LLC (Dubai) - NLSB"},
-                    {"First Name": "Row 2", "Middle Name": ".", "Last Name": "Default", "Contract Name": "GOLDEN BEE FOODS RESTAURANT LLC (Dubai) - NLSB"},
-                    {"First Name": "Row 3", "Middle Name": ".", "Last Name": "Default", "Contract Name": "GOLDEN BEE FOODS RESTAURANT LLC (Dubai) - NLSB"}
+                    {"First Name": "Row 1", "Middle Name": ".", "Last Name": "Default", "Contract Name": ""},
+                    {"First Name": "Row 2", "Middle Name": ".", "Last Name": "Default", "Contract Name": ""},
+                    {"First Name": "Row 3", "Middle Name": ".", "Last Name": "Default", "Contract Name": ""}
                 ])
             
             # Process data based on what we have
@@ -254,7 +254,7 @@ class DataCombiner:
                         first_row = result_df.iloc[0].copy()
                         
                         # Preserve contract name value
-                        contract_name = first_row.get('Contract Name', 'GOLDEN BEE FOODS RESTAURANT LLC (Dubai) - NLSB')
+                        contract_name = first_row.get('Contract Name', '')
                         
                         # Create 3 rows total with default values
                         result_rows = []
@@ -283,7 +283,7 @@ class DataCombiner:
                     result_data = {}
                     
                     # Set default Contract Name
-                    result_data['Contract Name'] = 'GOLDEN BEE FOODS RESTAURANT LLC (Dubai) - NLSB'
+                    result_data['Contract Name'] = ''
                     
                     # Try to map extraction directly to template columns
                     for col in template_columns:
@@ -346,7 +346,7 @@ class DataCombiner:
                 
                 # Ensure Contract Name is populated
                 if 'Contract Name' in result_df.columns and (result_df['Contract Name'].isna().all() or (result_df['Contract Name'] == '').all()):
-                    result_df['Contract Name'] = 'GOLDEN BEE FOODS RESTAURANT LLC (Dubai) - NLSB'
+                    result_df['Contract Name'] = ''
                     logger.info("Setting default Contract Name")
                 
                 # *** NEW CODE: Final check for Effective Date ***
@@ -690,7 +690,7 @@ class DataCombiner:
                 )
             else:
                 # If no row has a Contract Name, set a default
-                result_df['Contract Name'] = 'GOLDEN BEE FOODS RESTAURANT LLC (Dubai) - NLSB'
+                result_df['Contract Name'] = ''
                 
             logger.info(f"Ensured Contract Name is populated for all rows: {result_df['Contract Name'].iloc[0]}")
         
@@ -1407,6 +1407,30 @@ class DataCombiner:
         # Process special name fields
         if 'full_name' in extracted and extracted['full_name'] != self.DEFAULT_VALUE:
             self._split_full_name(extracted['full_name'], combined)
+        
+        # Ensure visa file number and unified no are set from any available source
+        if doc_type == 'visa':
+            # Check for entry_permit_no and use it for visa_file_number if needed
+            if 'entry_permit_no' in extracted and extracted['entry_permit_no'] != self.DEFAULT_VALUE:
+                if 'visa_file_number' not in combined or combined['visa_file_number'] == self.DEFAULT_VALUE:
+                    combined['visa_file_number'] = extracted['entry_permit_no']
+                    combined['Visa File Number'] = extracted['entry_permit_no']
+                    logger.info(f"Combined data: Set visa_file_number from entry_permit_no: {extracted['entry_permit_no']}")
+            
+            # Check for file fields and use for visa_file_number if needed
+            for field in ['file', 'file_no', 'file_number']:
+                if field in extracted and extracted[field] != self.DEFAULT_VALUE:
+                    if 'visa_file_number' not in combined or combined['visa_file_number'] == self.DEFAULT_VALUE:
+                        combined['visa_file_number'] = extracted[field]
+                        combined['Visa File Number'] = extracted[field]
+                        logger.info(f"Combined data: Set visa_file_number from {field}: {extracted[field]}")
+            
+            # Check for unified number variants
+            for field in ['unified_no', 'uid', 'u.i.d._no.', 'unified_number', 'unified']:
+                if field in extracted and extracted[field] != self.DEFAULT_VALUE:
+                    combined['unified_no'] = extracted[field]
+                    combined['Unified No'] = extracted[field]
+                    logger.info(f"Combined data: Set unified_no from {field}: {extracted[field]}")
         
         # Process name components if available
         if 'given_names' in extracted and 'surname' in extracted:
