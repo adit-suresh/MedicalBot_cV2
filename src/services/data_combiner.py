@@ -139,6 +139,30 @@ class DataCombiner:
                                     extracted_data: Dict, excel_data: Any = None, document_paths: Dict[str, Any] = None) -> Dict:
         """Combine data with better handling of multiple rows."""
         logger.info(f"Starting data combination with template: {template_path}")
+        
+        if 'icp.xlsx' in template_path.lower():
+            logger.info("Detected ICP template, redirecting to ICP processing")
+            
+            # Figure out the Excel path from various sources
+            excel_path = None
+            
+            # Find the Excel file path
+            excel_path = None
+            if isinstance(excel_data, str) and (excel_data.endswith('.xls') or excel_data.endswith('.xlsx')):
+                excel_path = excel_data
+            elif isinstance(document_paths, dict) and 'excel' in document_paths:
+                if isinstance(document_paths['excel'], list) and document_paths['excel']:
+                    excel_path = document_paths['excel'][0]
+                elif isinstance(document_paths['excel'], str):
+                    excel_path = document_paths['excel']
+            
+            if not excel_path:
+                logger.error("ICP processing requires an Excel file but none was found")
+                raise ServiceError("ICP processing requires an Excel file but none was found")
+                
+            logger.info(f"Using Excel file for ICP processing: {excel_path}")
+            return self.process_icp_linking(excel_path, output_path)
+        
         logger.info(f"Extracted data has {len(extracted_data)} fields: {list(extracted_data.keys())}")
         
         logger.info("===== DATA COMBINER INPUT =====")
@@ -178,6 +202,9 @@ class DataCombiner:
             if not os.path.exists(template_path):
                 raise FileNotFoundError(f"Template file not found: {template_path}")
                 
+            # Detect template type
+            is_takaful = 'takaful' in template_path.lower()
+            
             # Get template structure
             template_info = self._get_template_structure(template_path)
             template_columns = template_info['columns']
@@ -280,27 +307,36 @@ class DataCombiner:
                 result_data_list = []
                 
                 for i in range(3):
-                    result_data = {}
-                    
-                    # Set default Contract Name
-                    result_data['Contract Name'] = ''
-                    
-                    # Try to map extraction directly to template columns
-                    for col in template_columns:
-                        col_lower = col.lower()
-                        # Check for direct matches in extracted data
-                        for key, value in extracted_data.items():
-                            key_lower = key.lower()
-                            if key_lower == col_lower or key_lower.replace('_', ' ') == col_lower:
-                                result_data[col] = value
-                                break
-                        # If no match found, use default value
-                        if col not in result_data:
-                            result_data[col] = self.DEFAULT_VALUE
-                    
-                    # Customize row based on index
-                    result_data['First Name'] = f"Row {i+1}" if i > 0 else result_data.get('First Name', 'Default')
-                    result_data['Last Name'] = 'Default' if i > 0 else result_data.get('Last Name', 'Default')
+                    # Apply Takaful mapping if it's a Takaful template
+                    if is_takaful:
+                        row_data = self._combine_row_data(extracted_data, {}, document_paths)
+                        result_data = self._map_data_to_takaful_template(row_data, template_columns)
+                        # Customize row based on index for multiple rows
+                        if i > 0:
+                            result_data['FirstName'] = f"Row {i+1}"
+                            result_data['LastName'] = 'Default'
+                    else:
+                        result_data = {}
+                        
+                        # Set default Contract Name
+                        result_data['Contract Name'] = ''
+                        
+                        # Try to map extraction directly to template columns
+                        for col in template_columns:
+                            col_lower = col.lower()
+                            # Check for direct matches in extracted data
+                            for key, value in extracted_data.items():
+                                key_lower = key.lower()
+                                if key_lower == col_lower or key_lower.replace('_', ' ') == col_lower:
+                                    result_data[col] = value
+                                    break
+                            # If no match found, use default value
+                            if col not in result_data:
+                                result_data[col] = self.DEFAULT_VALUE
+                        
+                        # Customize row based on index
+                        result_data['First Name'] = f"Row {i+1}" if i > 0 else result_data.get('First Name', 'Default')
+                        result_data['Last Name'] = 'Default' if i > 0 else result_data.get('Last Name', 'Default')
                     
                     result_data_list.append(result_data)
                 
@@ -323,7 +359,7 @@ class DataCombiner:
                     
                 # Final cleanup of date formats
                 date_fields = ['effective_date', 'dob', 'passport_expiry_date', 'visa_expiry_date', 
-                            'Effective Date', 'DOB', 'Passport Expiry Date', 'Visa Expiry Date']
+                            'Effective Date', 'DOB', 'Passport Expiry Date', 'Visa Expiry Date', 'EffectiveDate']
                 for field in date_fields:
                     if field in result_df.columns:
                         result_df[field] = result_df[field].apply(
@@ -334,7 +370,7 @@ class DataCombiner:
                 for col in result_df.columns:
                     col_lower = col.lower()
                     # Only Middle Name gets '.' default
-                    if col_lower == 'middle name' or col == 'Middle Name':
+                    if col_lower == 'middle name' or col == 'Middle Name' or col == 'SecondName':
                         result_df[col] = result_df[col].apply(
                             lambda x: '.' if pd.isna(x) or x == '' or x == self.DEFAULT_VALUE else x
                         )
@@ -353,7 +389,15 @@ class DataCombiner:
                 result_df = self._ensure_effective_date(result_df)
                 
                 # Log key columns before saving
-                for col in ['First Name', 'Last Name', 'Nationality', 'Passport No', 'Emirates Id', 'Unified No', 'Contract Name', 'Effective Date']:
+                sample_columns = []
+                
+                # Check for template type to log appropriate columns
+                if is_takaful:
+                    sample_columns = ['FirstName', 'LastName', 'Country', 'PassportNum', 'EIDNumber', 'UIDNo', 'Category', 'EffectiveDate']
+                else:
+                    sample_columns = ['First Name', 'Last Name', 'Nationality', 'Passport No', 'Emirates Id', 'Unified No', 'Contract Name', 'Effective Date']
+                
+                for col in sample_columns:
                     if col in result_df.columns:
                         values = result_df[col].tolist()
                         logger.info(f"Column {col} values: {values}")
@@ -1292,21 +1336,34 @@ class DataCombiner:
                     if field == 'passport_number':
                         combined['passport_no'] = extracted[field]
                         combined['Passport No'] = extracted[field]
+                        # For Takaful template
+                        combined['PassportNum'] = extracted[field]
                     elif field == 'passport_no':
                         combined['passport_number'] = extracted[field]
                         combined['Passport No'] = extracted[field]
+                        # For Takaful template
+                        combined['PassportNum'] = extracted[field]
                     elif field == 'given_names':
                         combined['first_name'] = extracted[field]
                         combined['First Name'] = extracted[field]
+                        # For Takaful template
+                        combined['FirstName'] = extracted[field]
                     elif field == 'surname':
                         combined['last_name'] = extracted[field]
                         combined['Last Name'] = extracted[field]
+                        # For Takaful template
+                        combined['LastName'] = extracted[field]
                     elif field == 'date_of_birth':
                         combined['dob'] = extracted[field]
                         combined['DOB'] = extracted[field]
                     elif field == 'gender' or field == 'sex':
                         combined['gender'] = extracted[field]
                         combined['Gender'] = extracted[field]
+                    elif field == 'nationality':
+                        combined['nationality'] = extracted[field]
+                        combined['Nationality'] = extracted[field]
+                        # For Takaful template
+                        combined['Country'] = extracted[field]
                     else:
                         # Direct field mapping
                         combined[field] = extracted[field]
@@ -1321,13 +1378,19 @@ class DataCombiner:
                     if field == 'entry_permit_no':
                         combined['entry_permit_no'] = extracted[field]
                         combined['Visa File Number'] = extracted[field]
+                        # For Takaful template
+                        combined['ResidentFileNumber'] = extracted[field]
                     elif field == 'visa_file_number':
                         combined['visa_file_number'] = extracted[field]
                         combined['Visa File Number'] = extracted[field]
                         combined['entry_permit_no'] = extracted[field]
+                        # For Takaful template
+                        combined['ResidentFileNumber'] = extracted[field]
                     elif field == 'unified_no':
                         combined['unified_no'] = extracted[field]
                         combined['Unified No'] = extracted[field]
+                        # For Takaful template
+                        combined['UIDNo'] = extracted[field]
                     elif field == 'full_name':
                         # Only use if we don't have first and last name already
                         if ('first_name' not in combined or combined['first_name'] == self.DEFAULT_VALUE) and \
@@ -1349,9 +1412,16 @@ class DataCombiner:
                         if field == 'passport_number':
                             combined['passport_no'] = extracted[field]
                             combined['Passport No'] = extracted[field]
+                            # For Takaful template
+                            combined['PassportNum'] = extracted[field]
                         elif field == 'date_of_birth':
                             combined['dob'] = extracted[field]
                             combined['DOB'] = extracted[field]
+                        elif field == 'nationality':
+                            combined['nationality'] = extracted[field]
+                            combined['Nationality'] = extracted[field]
+                            # For Takaful template
+                            combined['Country'] = extracted[field]
                         else:
                             combined[field] = extracted[field]
                             excel_field = field.replace('_', ' ').title()
@@ -1360,10 +1430,14 @@ class DataCombiner:
         # First, format Emirates ID in Excel data if present
         if 'emirates_id' in combined and combined['emirates_id'] != self.DEFAULT_VALUE:
             combined['emirates_id'] = self._format_emirates_id(combined['emirates_id'])
-            
+            # For Takaful template
+            combined['EIDNumber'] = self._format_emirates_id(combined['emirates_id'])
+                
         # Make sure Emirates ID is properly processed
         if 'Emirates Id' in combined and combined['Emirates Id'] != self.DEFAULT_VALUE:
             combined['Emirates Id'] = self._process_emirates_id(combined['Emirates Id'])
+            # For Takaful template
+            combined['EIDNumber'] = self._process_emirates_id(combined['Emirates Id'])
         
         # Identify special fields that require custom handling
         name_fields = ['first_name', 'middle_name', 'last_name', 'full_name']
@@ -1372,24 +1446,32 @@ class DataCombiner:
         
         # Explicitly map Textract fields to Excel fields - critical for proper mapping
         critical_mappings = {
-            'nationality': 'Nationality',
-            'passport_number': 'Passport No',
-            'emirates_id': 'Emirates Id',
-            'visa_file_number': 'Visa File Number',
-            'visa_number': 'Visa File Number',
-            'unified_no': 'Unified No',
-            'u.i.d._no.': 'Unified No',
+            'nationality': ['Nationality', 'Country'],
+            'passport_number': ['Passport No', 'PassportNum'],
+            'emirates_id': ['Emirates Id', 'EIDNumber'],
+            'visa_file_number': ['Visa File Number', 'ResidentFileNumber'],
+            'visa_number': ['Visa File Number', 'ResidentFileNumber'],
+            'unified_no': ['Unified No', 'UIDNo'],
+            'u.i.d._no.': ['Unified No', 'UIDNo'],
             'profession': 'Occupation',
             'date_of_birth': 'DOB',
             'name': 'First Name',  # Map full name to first name if needed
         }
         
         # Apply all critical mappings with direct field names
-        for ext_field, excel_field in critical_mappings.items():
+        for ext_field, excel_fields in critical_mappings.items():
             if ext_field in extracted and extracted[ext_field] != self.DEFAULT_VALUE:
-                if excel_field not in combined or combined[excel_field] == self.DEFAULT_VALUE or pd.isna(combined[excel_field]):
-                    combined[excel_field] = extracted[ext_field]
-                    logger.info(f"Critical mapping: {ext_field} -> {excel_field}: {extracted[ext_field]}")
+                # Handle both single field and list of fields
+                if isinstance(excel_fields, list):
+                    for excel_field in excel_fields:
+                        if excel_field not in combined or combined[excel_field] == self.DEFAULT_VALUE or pd.isna(combined[excel_field]):
+                            combined[excel_field] = extracted[ext_field]
+                            logger.info(f"Critical mapping: {ext_field} -> {excel_field}: {extracted[ext_field]}")
+                else:
+                    excel_field = excel_fields
+                    if excel_field not in combined or combined[excel_field] == self.DEFAULT_VALUE or pd.isna(combined[excel_field]):
+                        combined[excel_field] = extracted[ext_field]
+                        logger.info(f"Critical mapping: {ext_field} -> {excel_field}: {extracted[ext_field]}")
         
         # DOB handling with more explicit handling
         if 'dob' in excel and excel['dob'] not in [self.DEFAULT_VALUE, '', None, 'nan']:
@@ -1415,6 +1497,8 @@ class DataCombiner:
                 if 'visa_file_number' not in combined or combined['visa_file_number'] == self.DEFAULT_VALUE:
                     combined['visa_file_number'] = extracted['entry_permit_no']
                     combined['Visa File Number'] = extracted['entry_permit_no']
+                    # For Takaful template
+                    combined['ResidentFileNumber'] = extracted['entry_permit_no']
                     logger.info(f"Combined data: Set visa_file_number from entry_permit_no: {extracted['entry_permit_no']}")
             
             # Check for file fields and use for visa_file_number if needed
@@ -1423,6 +1507,8 @@ class DataCombiner:
                     if 'visa_file_number' not in combined or combined['visa_file_number'] == self.DEFAULT_VALUE:
                         combined['visa_file_number'] = extracted[field]
                         combined['Visa File Number'] = extracted[field]
+                        # For Takaful template
+                        combined['ResidentFileNumber'] = extracted[field]
                         logger.info(f"Combined data: Set visa_file_number from {field}: {extracted[field]}")
             
             # Check for unified number variants
@@ -1430,6 +1516,8 @@ class DataCombiner:
                 if field in extracted and extracted[field] != self.DEFAULT_VALUE:
                     combined['unified_no'] = extracted[field]
                     combined['Unified No'] = extracted[field]
+                    # For Takaful template
+                    combined['UIDNo'] = extracted[field]
                     logger.info(f"Combined data: Set unified_no from {field}: {extracted[field]}")
         
         # Process name components if available
@@ -1457,14 +1545,14 @@ class DataCombiner:
         
         # Field mapping for extracted data
         field_map = {
-            'entry_permit_no': ['visa_file_number', 'unified_no', 'permit_number', 'Visa File Number'],
-            'emirates_id': ['eid', 'id_number', 'Emirates Id'],
-            'passport_number': ['passport_no', 'Passport No'],
-            'given_names': ['first_name', 'middle_name', 'First Name', 'Middle Name'],
-            'surname': ['last_name', 'Last Name'],
-            'full_name': ['name', 'customer_name', 'First Name'],
-            'name_en': ['name', 'first_name', 'First Name'],
-            'nationality': ['nationality', 'citizenship', 'Nationality'],
+            'entry_permit_no': ['visa_file_number', 'unified_no', 'permit_number', 'Visa File Number', 'ResidentFileNumber'],
+            'emirates_id': ['eid', 'id_number', 'Emirates Id', 'EIDNumber'],
+            'passport_number': ['passport_no', 'Passport No', 'PassportNum'],
+            'given_names': ['first_name', 'middle_name', 'First Name', 'Middle Name', 'FirstName', 'SecondName'],
+            'surname': ['last_name', 'Last Name', 'LastName'],
+            'full_name': ['name', 'customer_name', 'First Name', 'FirstName'],
+            'name_en': ['name', 'first_name', 'First Name', 'FirstName'],
+            'nationality': ['nationality', 'citizenship', 'Nationality', 'Country'],
             'date_of_birth': ['dob', 'birth_date', 'DOB'],
             'gender': ['sex', 'Gender'],
             'profession': ['occupation', 'job_title', 'Occupation'],
@@ -1529,15 +1617,21 @@ class DataCombiner:
                 
                 # Always update first name with the proper value
                 combined['first_name'] = first
+                # For Takaful template
+                combined['FirstName'] = first
                 
                 # Only update middle and last if they're missing or default
                 if 'middle_name' not in combined or combined['middle_name'] == self.DEFAULT_VALUE:
                     combined['middle_name'] = middle
+                    # For Takaful template
+                    combined['SecondName'] = middle
                     if middle != self.DEFAULT_VALUE:
                         logger.info(f"Set middle_name to: {middle}")
                         
                 if 'last_name' not in combined or combined['last_name'] == self.DEFAULT_VALUE:
                     combined['last_name'] = last
+                    # For Takaful template
+                    combined['LastName'] = last
                     if last != self.DEFAULT_VALUE:
                         logger.info(f"Set last_name to: {last}")
                         
@@ -1551,12 +1645,21 @@ class DataCombiner:
             if len(combined_name.split()) > 1 and ('Last Name' not in combined or combined['Last Name'] == self.DEFAULT_VALUE):
                 name_parts = combined_name.split()
                 combined['First Name'] = name_parts[0]
+                # For Takaful template
+                combined['FirstName'] = name_parts[0]
+                
                 if len(name_parts) > 2:
                     combined['Middle Name'] = ' '.join(name_parts[1:-1])
+                    # For Takaful template
+                    combined['SecondName'] = ' '.join(name_parts[1:-1])
                     combined['Last Name'] = name_parts[-1]
+                    # For Takaful template
+                    combined['LastName'] = name_parts[-1]
                 else:
                     combined['Last Name'] = name_parts[-1]
-                
+                    # For Takaful template
+                    combined['LastName'] = name_parts[-1]
+                    
         # Process contract name from employer name in visa
         if 'sponsor_name' in extracted and extracted['sponsor_name'] != self.DEFAULT_VALUE:
             if 'Contract Name' in combined:
@@ -1577,10 +1680,14 @@ class DataCombiner:
                     for contract in valid_contracts:
                         if 'FARNEK' in contract.upper():
                             combined['Contract Name'] = contract
+                            # For Takaful template
+                            combined['Category'] = contract
                             break
                 elif 'DRESHAK' in employer_name.upper():
                     combined['Contract Name'] = "Dreshak Maintenance LLC"
-                     
+                    # For Takaful template
+                    combined['Category'] = "Dreshak Maintenance LLC"
+                    
         # Check for visa file number and set visa issuance emirate
         if 'visa_file_number' in combined and combined['visa_file_number'] != self.DEFAULT_VALUE:
             visa_number = combined['visa_file_number']
@@ -1605,6 +1712,13 @@ class DataCombiner:
                 combined['Work Region'] = 'DUBAI (DISTRICT UNKNOWN)'
                 combined['Residence Region'] = 'DUBAI (DISTRICT UNKNOWN)'
                 combined['Member Type'] = 'Expat whose residence issued in Dubai'
+                
+                # For Takaful template
+                combined['Emirate'] = 'Dubai'
+                combined['City'] = 'Dubai'
+                combined['ResidentialLocation'] = 'DUBAI (DISTRICT UNKNOWN)'
+                combined['WorkLocation'] = 'DUBAI (DISTRICT UNKNOWN)'
+                combined['MemberType'] = '4'  # Code for Dubai
             elif digits.startswith('10'):
                 logger.info(f"Visa file number {visa_number} starts with 10, setting emirate to Abu Dhabi")
                 combined['visa_issuance_emirate'] = 'Abu Dhabi'
@@ -1621,6 +1735,13 @@ class DataCombiner:
                 combined['Work Region'] = 'Al Ain City'
                 combined['Residence Region'] = 'Al Ain City'
                 combined['Member Type'] = 'Expat whose residence issued other than Dubai'
+                
+                # For Takaful template
+                combined['Emirate'] = 'Abu Dhabi'
+                combined['City'] = 'Abu Dhabi'
+                combined['ResidentialLocation'] = 'Al Ain City'
+                combined['WorkLocation'] = 'Al Ain City'
+                combined['MemberType'] = '5'  # Code for other Emirates
         
         # Make sure effective date is set
         if 'effective_date' not in combined or combined['effective_date'] == self.DEFAULT_VALUE:
@@ -1630,6 +1751,8 @@ class DataCombiner:
         # Also check Effective Date (Excel column name)
         if 'Effective Date' not in combined or combined['Effective Date'] == self.DEFAULT_VALUE:
             combined['Effective Date'] = datetime.now().strftime('%d/%m/%Y')
+            # For Takaful template
+            combined['EffectiveDate'] = datetime.now().strftime('%d/%m/%Y')
                     
         # Family No = Staff ID
         if 'staff_id' in combined and combined['staff_id'] != self.DEFAULT_VALUE:
@@ -1648,6 +1771,8 @@ class DataCombiner:
         # Commission
         combined['commission'] = 'NO'
         combined['Commission'] = 'NO'
+        # For Takaful template
+        combined['IsCommissionBasedSalary'] = 'No'
 
         # Handle Mobile No format
         if 'mobile_no' in combined and combined['mobile_no'] != self.DEFAULT_VALUE:
@@ -1663,6 +1788,8 @@ class DataCombiner:
             digits = ''.join(filter(str.isdigit, str(combined['Mobile No'])))
             if len(digits) >= 9:
                 combined['Mobile No'] = digits[-9:]
+            # For Takaful template
+            combined['MobileNumber'] = digits[-9:]
 
         # Handle emirate-based fields
         if 'visa_issuance_emirate' in combined:
@@ -1681,6 +1808,13 @@ class DataCombiner:
                 combined['Work Region'] = 'DUBAI (DISTRICT UNKNOWN)'
                 combined['Residence Region'] = 'DUBAI (DISTRICT UNKNOWN)'
                 combined['Member Type'] = 'Expat whose residence issued in Dubai'
+                
+                # For Takaful template
+                combined['Emirate'] = 'Dubai'
+                combined['City'] = 'Dubai'
+                combined['ResidentialLocation'] = 'DUBAI (DISTRICT UNKNOWN)'
+                combined['WorkLocation'] = 'DUBAI (DISTRICT UNKNOWN)'
+                combined['MemberType'] = '4'  # Code for Dubai
             elif issuance_emirate:  # Any other emirate
                 combined['work_emirate'] = issuance_emirate
                 combined['residence_emirate'] = issuance_emirate
@@ -1695,12 +1829,21 @@ class DataCombiner:
                 combined['Residence Region'] = 'Al Ain City'
                 combined['Member Type'] = 'Expat whose residence issued other than Dubai'
                 
+                # For Takaful template
+                combined['Emirate'] = issuance_emirate
+                combined['City'] = issuance_emirate
+                combined['ResidentialLocation'] = 'Al Ain City'
+                combined['WorkLocation'] = 'Al Ain City'
+                combined['MemberType'] = '5'  # Code for other Emirates
+                
         if 'effective_date' in combined and 'Effective Date' in combined:
             # Keep only one effective date field - prefer Effective Date (Excel column)
             if combined['Effective Date'] != self.DEFAULT_VALUE:
                 combined.pop('effective_date', None)
             elif combined['effective_date'] != self.DEFAULT_VALUE:
                 combined['Effective Date'] = combined['effective_date']
+                # For Takaful template
+                combined['EffectiveDate'] = combined['effective_date']
                 combined.pop('effective_date', None)
 
         # Company phone and email
@@ -1711,6 +1854,9 @@ class DataCombiner:
         if 'Mobile No' in combined and combined['Mobile No'] != self.DEFAULT_VALUE:
             if 'Company Phone' not in combined or combined['Company Phone'] == self.DEFAULT_VALUE:
                 combined['Company Phone'] = combined['Mobile No']
+            # For Takaful template
+            if 'EntityContactNumber' not in combined or combined['EntityContactNumber'] == self.DEFAULT_VALUE:
+                combined['EntityContactNumber'] = combined['Mobile No']
 
         if 'email' in combined and combined['email'] != self.DEFAULT_VALUE:
             if 'company_mail' not in combined or combined['company_mail'] == self.DEFAULT_VALUE:
@@ -1719,16 +1865,23 @@ class DataCombiner:
         if 'Email' in combined and combined['Email'] != self.DEFAULT_VALUE:
             if 'Company Mail' not in combined or combined['Company Mail'] == self.DEFAULT_VALUE:
                 combined['Company Mail'] = combined['Email']
+            # For Takaful template
+            if 'EstablishmentEmail' not in combined or combined['EstablishmentEmail'] == self.DEFAULT_VALUE:
+                combined['EstablishmentEmail'] = combined['Email']
+            if 'EmailId' not in combined or combined['EmailId'] == self.DEFAULT_VALUE:
+                combined['EmailId'] = combined['Email']
         
         # Make sure effective date is set only in the correct field
         if 'effective_date' in combined and 'Effective Date' in combined:
             # If Effective Date is empty but effective_date has value, use it
             if combined['Effective Date'] == self.DEFAULT_VALUE and combined['effective_date'] != self.DEFAULT_VALUE:
                 combined['Effective Date'] = combined['effective_date']
+                # For Takaful template
+                combined['EffectiveDate'] = combined['effective_date']
             # Always remove lowercase version to avoid duplication
             combined.pop('effective_date', None)
             logger.info("Removed duplicate 'effective_date' field")
-            
+                
         # CRITICAL FIX: Look for properly formatted visa file number fields (XXX/YYYY/ZZZZZZ)
         visa_file_number_found = False
 
@@ -1741,6 +1894,8 @@ class DataCombiner:
                 if prefix.isdigit() and (prefix.startswith('10') or prefix.startswith('20')):
                     combined['visa_file_number'] = file_val
                     combined['Visa File Number'] = file_val
+                    # For Takaful template
+                    combined['ResidentFileNumber'] = file_val
                     logger.info(f"Set Visa File Number from file field: {file_val}")
                     visa_file_number_found = True
 
@@ -1753,12 +1908,16 @@ class DataCombiner:
                 if prefix.isdigit() and (prefix.startswith('10') or prefix.startswith('20')):
                     combined['visa_file_number'] = entry_val
                     combined['Visa File Number'] = entry_val
+                    # For Takaful template
+                    combined['ResidentFileNumber'] = entry_val
                     logger.info(f"Set Visa File Number from entry_permit_no field: {entry_val}")
                     visa_file_number_found = True
             # Only use entry_permit_no as fallback if no properly formatted value found
             elif not visa_file_number_found:
                 combined['entry_permit_no'] = entry_val
                 combined['Visa File Number'] = entry_val
+                # For Takaful template
+                combined['ResidentFileNumber'] = entry_val
                 logger.info(f"Set Visa File Number from entry_permit_no field (non-standard format): {entry_val}")
                 visa_file_number_found = True
 
@@ -1770,9 +1929,58 @@ class DataCombiner:
                 if prefix.isdigit() and (prefix.startswith('10') or prefix.startswith('20')):
                     combined['visa_file_number'] = visa_val
                     combined['Visa File Number'] = visa_val
+                    # For Takaful template
+                    combined['ResidentFileNumber'] = visa_val
                     logger.info(f"Set Visa File Number from visa_file_number field: {visa_val}")
                     visa_file_number_found = True
-                
+        
+        # Special fields for Takaful template
+        # Set Takaful specific defaults if not already set
+        if 'Relation' not in combined or combined['Relation'] == self.DEFAULT_VALUE:
+            combined['Relation'] = 'Principal'
+        
+        if 'EntityType' not in combined or combined['EntityType'] == self.DEFAULT_VALUE:
+            combined['EntityType'] = 'Establishment'
+        
+        if 'EntityId' not in combined or combined['EntityId'] == self.DEFAULT_VALUE:
+            combined['EntityId'] = '230376/6'
+        
+        # Set SalaryBand based on Salary field
+        if 'Salary' in combined and combined['Salary'] and combined['Salary'] != self.DEFAULT_VALUE:
+            salary_text = str(combined['Salary']).lower()
+            # Check for specific phrases indicating salary less than 4000
+            is_less_than_4000 = any(phrase in salary_text for phrase in [
+                'less than 4000', '<4000', '< 4000', 'below 4000', 'lesser than 4000'
+            ])
+            
+            # Set LSB if salary is less than 4000
+            if is_less_than_4000:
+                combined['SalaryBand'] = 'LSB'
+            else:
+                combined['SalaryBand'] = 'NLSB'
+        elif 'salary_band' in combined and combined['salary_band'] and combined['salary_band'] != self.DEFAULT_VALUE:
+            # Check if NAS salary band contains LSB values
+            salary_band_text = str(combined['salary_band']).lower()
+            if combined['salary_band'] == '1' or 'less than 4000' in salary_band_text:
+                combined['SalaryBand'] = 'LSB'
+            else:
+                combined['SalaryBand'] = 'NLSB'
+        else:
+            # Default to NLSB if no salary information
+            combined['SalaryBand'] = 'NLSB'
+        
+        # Set RelationTo to match ResidentFileNumber
+        if 'ResidentFileNumber' in combined and combined['ResidentFileNumber'] and combined['ResidentFileNumber'] != self.DEFAULT_VALUE:
+            combined['RelationTo'] = combined['ResidentFileNumber']
+        
+        # Format SecondName (Middle Name) for Takaful template
+        if 'SecondName' not in combined or not combined['SecondName'] or combined['SecondName'] == self.DEFAULT_VALUE:
+            combined['SecondName'] = '.'
+        
+        # Transfer Middle Name to SecondName if it exists
+        if 'Middle Name' in combined and combined['Middle Name'] and combined['Middle Name'] != self.DEFAULT_VALUE and combined['Middle Name'] != '.':
+            combined['SecondName'] = combined['Middle Name']
+        
         return combined
 
     def _split_full_name(self, full_name: str, combined: Dict) -> None:
@@ -2445,3 +2653,480 @@ class DataCombiner:
             logger.info(f"FINAL CHECK: Set 'Effective Date ' to {today_date} for all {len(df)} rows")
         
         return df
+    
+    def _map_data_to_takaful_template(self, data: Dict, template_columns: List[str]) -> Dict:
+        """Map extracted data to the Takaful template format."""
+        mapped = {}
+        
+        # Field mappings for Takaful template
+        # Format: 'takaful_column': ['corresponding_fields_in_data']
+        takaful_mappings = {
+            'StaffNo': ['staff_id', 'Staff ID', 'employee_id', 'employee_no'],
+            'FirstName': ['first_name', 'First Name', 'given_name'],
+            'SecondName': ['middle_name', 'Middle Name'],
+            'LastName': ['last_name', 'Last Name', 'surname', 'family_name'],
+            'DOB': ['dob', 'DOB', 'date_of_birth', 'Date of Birth', 'birth_date'],
+            'Gender': ['gender', 'Gender', 'sex'],
+            'Relation': ['relation', 'Relation', 'relationship'],
+            'Country': ['nationality', 'Nationality', 'citizenship', 'country_of_citizenship'],
+            'MaritalStatus': ['marital_status', 'Marital Status', 'civil_status'],
+            'Category': ['contract_name', 'Contract Name', 'policy_category'],
+            'EffectiveDate': ['effective_date', 'Effective Date', 'start_date', 'enrollment_date'],
+            'Emirate': ['visa_issuance_emirate', 'Visa Issuance Emirate', 'visa_emirate'],
+            'EIDNumber': ['emirates_id', 'Emirates Id', 'eid', 'id_number'],
+            'MobileNumber': ['mobile_no', 'Mobile No', 'phone', 'cell_phone'],
+            'EmailId': ['email', 'Email', 'email_address'],
+            'PassportNum': ['passport_no', 'Passport No', 'passport_number', 'passport'],
+            'UIDNo': ['unified_no', 'Unified No', 'unified_number', 'uid_no'],
+            'ResidentFileNumber': ['visa_file_number', 'Visa File Number', 'entry_permit_no', 'file'],
+            'IsCommissionBasedSalary': ['commission', 'Commission'],
+            'MemberType': ['member_type', 'Member Type', 'enrollee_type'],
+            'EstablishmentEmail': ['company_mail', 'Company Mail', 'company_email', 'business_email'],
+            'EntityContactNumber': ['company_phone', 'Company Phone', 'company_tel', 'office_phone']
+        }
+        
+        # Map each Takaful column to data
+        for takaful_column in template_columns:
+            # Skip if column doesn't exist in our mappings
+            if takaful_column not in takaful_mappings:
+                mapped[takaful_column] = ''
+                continue
+                
+            # Check all possible field variations
+            found = False
+            for field in takaful_mappings[takaful_column]:
+                if field in data and data[field] not in [self.DEFAULT_VALUE, None, '']:
+                    mapped[takaful_column] = data[field]
+                    found = True
+                    logger.info(f"Mapped '{takaful_column}' from '{field}': {data[field]}")
+                    break
+                    
+            # Set default if not found
+            if not found:
+                mapped[takaful_column] = ''
+        
+        # Apply special rules and defaults for Takaful template
+        
+        # Relationship should always be 'Principal'
+        mapped['Relation'] = 'Principal'
+        
+        # EntityType should always be 'Establishment'
+        mapped['EntityType'] = 'Establishment'
+        
+        # EntityId should always be '230376/6'
+        mapped['EntityId'] = '230376/6'
+        
+        # SalaryBand based on Salary value
+        if 'Salary' in data and data['Salary']:
+            salary_text = str(data['Salary']).lower()
+            # Check for common patterns indicating salary less than 4000
+            if ('less than 4000' in salary_text or 
+                '<4000' in salary_text or 
+                '< 4000' in salary_text or 
+                'below 4000' in salary_text or
+                'lesser than 4000' in salary_text):
+                mapped['SalaryBand'] = 'LSB'
+            else:
+                # Check for ranges that might include "less than" but not for 4000
+                is_less_than_4000 = any(phrase in salary_text for phrase in [
+                    'less than 4000', '<4000', '< 4000', 'below 4000', 'lesser than 4000'
+                ])
+                
+                # Set to LSB if salary is explicitly less than 4000
+                if is_less_than_4000:
+                    mapped['SalaryBand'] = 'LSB'
+                else:
+                    mapped['SalaryBand'] = 'NLSB'  # Higher salary band
+        else:
+            # Default if no salary information is available
+            mapped['SalaryBand'] = 'NLSB'  # Default to NLSB
+        
+        # IsCommissionBasedSalary should always be 'No'
+        mapped['IsCommissionBasedSalary'] = 'No'
+        
+        # RelationTo should copy the ResidentFileNumber
+        if 'ResidentFileNumber' in mapped and mapped['ResidentFileNumber']:
+            mapped['RelationTo'] = mapped['ResidentFileNumber']
+        
+        # Handle special formatting
+        
+        # Format Emirates ID
+        if 'EIDNumber' in mapped and mapped['EIDNumber']:
+            mapped['EIDNumber'] = self._process_emirates_id(mapped['EIDNumber'])
+        
+        # Format Nationality
+        if 'Country' in mapped and mapped['Country']:
+            mapped['Country'] = self._standardize_nationality(mapped['Country'])
+        
+        # Ensure Middle Name has '.' if empty
+        if 'SecondName' not in mapped or not mapped['SecondName']:
+            mapped['SecondName'] = '.'
+        
+        return mapped
+    
+
+    def process_icp_linking(self, input_path: str, output_path: str) -> Dict:
+        """Process ICP linking by transforming input Excel to output format."""
+        logger.info(f"Starting ICP linking process: {input_path} -> {output_path}")
+        
+        try:
+            # Read input file
+            input_df = pd.read_excel(input_path)
+            logger.info(f"Read input Excel with {len(input_df)} rows and {len(input_df.columns)} columns")
+            
+            # Create output directory if it doesn't exist
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            # Use openpyxl directly instead of pandas
+            from openpyxl import Workbook
+            wb = Workbook()
+            ws = wb.active
+            
+            # Add header row
+            headers = [
+                "Company Code (LeaveEmpty)", "Policy Number", "Policy Type",
+                "Policy Owner Type", "Policy Owner Name", "Policy Owner ID",
+                "Plan Name", "Policy Issue Date (YYYY-MM-DD)",
+                "Policy Start Date (YYYY-MM-DD)", "Policy Expiry Date (YYYY-MM-DD)",
+                "Enrollment Issue Date (YYYY-MM-DD)", "Enrollment Start Date (YYYY-MM-DD)",
+                "Enrollment Expiry Date (YYYY-MM-DD)", "Unified No (Conditional)",
+                "Emirates ID No (Conditional)", "Visa File No (Optional)",
+                "Birth Certificate No (Optional)", "Passport No (Conditional)",
+                "Gender", "Nationality", "Date Of Birth (YYYY-MM-DD)",
+                "Full Name En", "First Name En", "Middle Name En (Optional)",
+                "Last Name En", "Full Name Ar (Optional)", "First Name Ar (Optional)",
+                "Middle Name Ar (Optional)", "Last Name AR (Optional)",
+                "Marital Status ", "Relationship with Sponsor", "Member Type",
+                "Sponsor ID No (Conditional)", "Sponsor ID Type (Conditional)",
+                "Membership Card No (Optional)", "Class Name",
+                "Occupation Description (Optional)", "Emirates of Visa", "Emirates of Living"
+            ]
+            
+            # Write headers to first row
+            for col_idx, header in enumerate(headers, 1):
+                ws.cell(row=1, column=col_idx, value=header)
+            
+            # Process each row from input data
+            for row_idx, row in enumerate(input_df.itertuples(), 2):  # Start from row 2 (after headers)
+                # Date formatting function
+                def format_date(date_val):
+                    if pd.isna(date_val):
+                        return ""
+                    if isinstance(date_val, pd.Timestamp):
+                        return date_val.strftime("%Y-%m-%d")
+                    return str(date_val)
+                
+                # Format Emirates ID
+                def format_eid(eid):
+                    if pd.isna(eid):
+                        return ""
+                    eid_clean = ''.join(c for c in str(eid) if c.isdigit())
+                    if len(eid_clean) == 15:
+                        return f"{eid_clean[0:3]}-{eid_clean[3:7]}-{eid_clean[7:14]}-{eid_clean[14]}"
+                    return str(eid)
+                
+                # Initialize all cells as empty
+                for col_idx in range(1, len(headers) + 1):
+                    ws.cell(row=row_idx, column=col_idx, value="")
+                
+                # Get column indices
+                indices = {name: idx for idx, name in enumerate(input_df.columns)}
+                
+                # Helper to safely get values
+                def get_value(col_name, default=""):
+                    if col_name in indices:
+                        val = getattr(row, col_name, default)
+                        if pd.isna(val):
+                            return default
+                        return val
+                    return default
+                
+                # Map fields to output
+                # We'll write directly to cells to avoid any DataFrame conversion issues
+                
+                # Policy information
+                policy_no = get_value("Policy.No")
+                master_contract = get_value("MasterContract")
+                
+                ws.cell(row=row_idx, column=headers.index("Policy Number") + 1, value=str(policy_no))
+                ws.cell(row=row_idx, column=headers.index("Policy Owner Name") + 1, value=str(master_contract))
+                ws.cell(row=row_idx, column=headers.index("Policy Owner ID") + 1, value=str(policy_no))
+                ws.cell(row=row_idx, column=headers.index("Plan Name") + 1, value=str(master_contract))
+                
+                # Dates
+                eff_date = format_date(get_value("Policy.EffDate"))
+                exp_date = format_date(get_value("Policy.ExpDate"))
+                
+                ws.cell(row=row_idx, column=headers.index("Policy Issue Date (YYYY-MM-DD)") + 1, value=eff_date)
+                ws.cell(row=row_idx, column=headers.index("Policy Start Date (YYYY-MM-DD)") + 1, value=eff_date)
+                ws.cell(row=row_idx, column=headers.index("Policy Expiry Date (YYYY-MM-DD)") + 1, value=exp_date)
+                ws.cell(row=row_idx, column=headers.index("Enrollment Issue Date (YYYY-MM-DD)") + 1, value=eff_date)
+                ws.cell(row=row_idx, column=headers.index("Enrollment Start Date (YYYY-MM-DD)") + 1, value=eff_date)
+                ws.cell(row=row_idx, column=headers.index("Enrollment Expiry Date (YYYY-MM-DD)") + 1, value=exp_date)
+                
+                # IDs
+                ws.cell(row=row_idx, column=headers.index("Unified No (Conditional)") + 1, value=str(get_value("UID No")))
+                ws.cell(row=row_idx, column=headers.index("Emirates ID No (Conditional)") + 1, value=format_eid(get_value("National IdentityNo")))
+                ws.cell(row=row_idx, column=headers.index("Visa File No (Optional)") + 1, value=str(get_value("Visa No")))
+                ws.cell(row=row_idx, column=headers.index("Passport No (Conditional)") + 1, value=str(get_value("Passport Number")))
+                
+                # Personal information
+                gender = get_value("Gender")
+                if gender == "M":
+                    ws.cell(row=row_idx, column=headers.index("Gender") + 1, value="'1' Male")
+                elif gender == "F":
+                    ws.cell(row=row_idx, column=headers.index("Gender") + 1, value="'0' Female")
+                
+                ws.cell(row=row_idx, column=headers.index("Nationality") + 1, value=str(get_value("Nationality")))
+                ws.cell(row=row_idx, column=headers.index("Date Of Birth (YYYY-MM-DD)") + 1, value=format_date(get_value("DOB")))
+                
+                # Names
+                ws.cell(row=row_idx, column=headers.index("First Name En") + 1, value=str(get_value("First Name")))
+                ws.cell(row=row_idx, column=headers.index("Middle Name En (Optional)") + 1, value=str(get_value("Middle Name")))
+                ws.cell(row=row_idx, column=headers.index("Last Name En") + 1, value=str(get_value("Last Name")))
+                
+                ws.cell(row=row_idx, column=headers.index("First Name Ar (Optional)") + 1, value=str(get_value("First Name")))
+                ws.cell(row=row_idx, column=headers.index("Middle Name Ar (Optional)") + 1, value=str(get_value("Middle Name")))
+                ws.cell(row=row_idx, column=headers.index("Last Name AR (Optional)") + 1, value=str(get_value("Last Name")))
+                
+                # Status
+                marital = get_value("Marital Status")
+                if isinstance(marital, str):
+                    if marital.lower() == "single":
+                        ws.cell(row=row_idx, column=headers.index("Marital Status ") + 1, value="'2' Single")
+                    elif marital.lower() == "married":
+                        ws.cell(row=row_idx, column=headers.index("Marital Status ") + 1, value="'1' Married")
+                
+                # Relationship
+                dependency = get_value("Dependency")
+                if isinstance(dependency, str):
+                    if dependency.lower() == "principal":
+                        ws.cell(row=row_idx, column=headers.index("Relationship with Sponsor") + 1, value="'2' Employee")
+                        ws.cell(row=row_idx, column=headers.index("Member Type") + 1, value="'1' Primary")
+                    elif dependency.lower() == "spouse":
+                        ws.cell(row=row_idx, column=headers.index("Relationship with Sponsor") + 1, value="'3' Spouse")
+                        ws.cell(row=row_idx, column=headers.index("Member Type") + 1, value="'2' Dependent")
+                    elif dependency.lower() == "child":
+                        ws.cell(row=row_idx, column=headers.index("Relationship with Sponsor") + 1, value="'4' Child")
+                        ws.cell(row=row_idx, column=headers.index("Member Type") + 1, value="'2' Dependent")
+                    else:
+                        ws.cell(row=row_idx, column=headers.index("Member Type") + 1, value="'2' Dependent")
+                
+                # Sponsor and membership
+                ws.cell(row=row_idx, column=headers.index("Sponsor ID Type (Conditional)") + 1, value="'1' Unified Number")
+                ws.cell(row=row_idx, column=headers.index("Membership Card No (Optional)") + 1, value=str(get_value("Card Number")))
+                
+                # Emirates
+                emirate = get_value("Emirate-VisaIssued")
+                emirate_code = ""
+                
+                if isinstance(emirate, str):
+                    emirate_lower = emirate.lower()
+                    if "abu dhabi" in emirate_lower:
+                        emirate_code = "'1' ABUDHABI"
+                    elif "dubai" in emirate_lower:
+                        emirate_code = "'2' DUBAI"
+                    elif "sharjah" in emirate_lower:
+                        emirate_code = "'3' SHARJAH"
+                    elif "ajman" in emirate_lower:
+                        emirate_code = "'4' AJMAN"
+                    elif "umm al quwain" in emirate_lower:
+                        emirate_code = "'5' UMMALQUWAIN"
+                    elif "ras al khaimah" in emirate_lower:
+                        emirate_code = "'6' RASALKHAIMAH"
+                    elif "fujairah" in emirate_lower:
+                        emirate_code = "'7' FUJAIRAH"
+                    
+                    ws.cell(row=row_idx, column=headers.index("Emirates of Visa") + 1, value=emirate_code)
+                    ws.cell(row=row_idx, column=headers.index("Emirates of Living") + 1, value=emirate_code)
+            
+            # Save the file
+            logger.info(f"Saving Excel file to {output_path}")
+            wb.save(output_path)
+            
+            # Verify the file was saved
+            if os.path.exists(output_path):
+                size = os.path.getsize(output_path)
+                logger.info(f"Output file saved successfully, size: {size} bytes")
+            else:
+                logger.error(f"Failed to save output file at {output_path}")
+            
+            return {
+                'status': 'success',
+                'output_path': output_path,
+                'rows_processed': len(input_df)
+            }
+        except Exception as e:
+            logger.error(f"Error in ICP linking process: {str(e)}", exc_info=True)
+            raise ServiceError(f"ICP linking failed: {str(e)}")
+        
+    def _map_icp_row(self, row: pd.Series) -> Dict:
+        """Map a row from input format to ICP output format."""
+        output = {}
+        
+        # Helper function to safely get values
+        def safe_get(col):
+            if col in row and pd.notna(row[col]):
+                return row[col]
+            return ""
+        
+        # Helper function to format dates
+        def format_date(date_val):
+            if not date_val or pd.isna(date_val):
+                return ""
+            
+            try:
+                if isinstance(date_val, datetime):
+                    return date_val.strftime("%Y-%m-%d")
+                
+                # Try common date formats
+                for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y", "%Y/%m/%d", "%Y-%m-%d"]:
+                    try:
+                        return datetime.strptime(str(date_val), fmt).strftime("%Y-%m-%d")
+                    except:
+                        continue
+                        
+                # Return as is if we can't parse it
+                return str(date_val)
+            except:
+                return str(date_val)
+        
+        # Helper function for Emirates ID formatting
+        def format_emirates_id(eid):
+            if not eid or pd.isna(eid):
+                return ""
+                
+            # Clean up the ID
+            eid = ''.join(c for c in str(eid) if c.isdigit())
+            
+            # Format if it's the right length
+            if len(eid) == 15:
+                return f"{eid[0:3]}-{eid[3:7]}-{eid[7:14]}-{eid[14]}"
+            return str(eid)
+        
+        # Initialize all fields as empty
+        for col in [
+            "Company Code (LeaveEmpty)", "Policy Number", "Policy Type",
+            "Policy Owner Type", "Policy Owner Name", "Policy Owner ID",
+            "Plan Name", "Policy Issue Date (YYYY-MM-DD)",
+            "Policy Start Date (YYYY-MM-DD)", "Policy Expiry Date (YYYY-MM-DD)",
+            "Enrollment Issue Date (YYYY-MM-DD)", "Enrollment Start Date (YYYY-MM-DD)",
+            "Enrollment Expiry Date (YYYY-MM-DD)", "Unified No (Conditional)",
+            "Emirates ID No (Conditional)", "Visa File No (Optional)",
+            "Birth Certificate No (Optional)", "Passport No (Conditional)",
+            "Gender", "Nationality", "Date Of Birth (YYYY-MM-DD)",
+            "Full Name En", "First Name En", "Middle Name En (Optional)",
+            "Last Name En", "Full Name Ar (Optional)", "First Name Ar (Optional)",
+            "Middle Name Ar (Optional)", "Last Name AR (Optional)",
+            "Marital Status ", "Relationship with Sponsor", "Member Type",
+            "Sponsor ID No (Conditional)", "Sponsor ID Type (Conditional)",
+            "Membership Card No (Optional)", "Class Name",
+            "Occupation Description (Optional)", "Emirates of Visa", "Emirates of Living"
+        ]:
+            output[col] = ""
+        
+        # Log basic mapping info for debugging
+        policy_no = safe_get("Policy.No")
+        first_name = safe_get("First Name")
+        
+        logger.info(f"Mapping row with Policy.No: {policy_no}, First Name: {first_name}")
+        
+        # Map basic fields directly
+        output["Policy Number"] = policy_no
+        output["Policy Owner Name"] = safe_get("MasterContract")
+        output["Policy Owner ID"] = policy_no
+        output["Plan Name"] = safe_get("MasterContract")
+        
+        # Format dates
+        policy_eff_date = format_date(safe_get("Policy.EffDate"))
+        policy_exp_date = format_date(safe_get("Policy.ExpDate"))
+        
+        output["Policy Issue Date (YYYY-MM-DD)"] = policy_eff_date
+        output["Policy Start Date (YYYY-MM-DD)"] = policy_eff_date
+        output["Policy Expiry Date (YYYY-MM-DD)"] = policy_exp_date
+        output["Enrollment Issue Date (YYYY-MM-DD)"] = policy_eff_date
+        output["Enrollment Start Date (YYYY-MM-DD)"] = policy_eff_date
+        output["Enrollment Expiry Date (YYYY-MM-DD)"] = policy_exp_date
+        
+        # IDs
+        output["Unified No (Conditional)"] = safe_get("UID No")
+        output["Emirates ID No (Conditional)"] = format_emirates_id(safe_get("National IdentityNo"))
+        output["Visa File No (Optional)"] = safe_get("Visa No")
+        output["Passport No (Conditional)"] = safe_get("Passport Number")
+        
+        # Gender
+        gender = safe_get("Gender")
+        if str(gender).upper() == "M":
+            output["Gender"] = "'1' Male"
+        elif str(gender).upper() == "F":
+            output["Gender"] = "'0' Female"
+        
+        # Nationality
+        output["Nationality"] = safe_get("Nationality")
+        
+        # Date of Birth
+        output["Date Of Birth (YYYY-MM-DD)"] = format_date(safe_get("DOB"))
+        
+        # Name fields
+        output["First Name En"] = first_name
+        output["Middle Name En (Optional)"] = safe_get("Middle Name")
+        output["Last Name En"] = safe_get("Last Name")
+        
+        # Arabic name fields
+        output["First Name Ar (Optional)"] = first_name
+        output["Middle Name Ar (Optional)"] = safe_get("Middle Name")
+        output["Last Name AR (Optional)"] = safe_get("Last Name")
+        
+        # Marital Status
+        marital = safe_get("Marital Status")
+        if str(marital).lower() == "single":
+            output["Marital Status "] = "'2' Single"
+        elif str(marital).lower() == "married":
+            output["Marital Status "] = "'1' Married"
+        
+        # Relationship and Member Type
+        dependency = safe_get("Dependency")
+        if str(dependency).lower() == "principal":
+            output["Relationship with Sponsor"] = "'2' Employee"
+            output["Member Type"] = "'1' Primary"
+        elif str(dependency).lower() == "spouse":
+            output["Relationship with Sponsor"] = "'3' Spouse"
+            output["Member Type"] = "'2' Dependent"
+        elif str(dependency).lower() == "child":
+            output["Relationship with Sponsor"] = "'4' Child"
+            output["Member Type"] = "'2' Dependent"
+        else:
+            output["Member Type"] = "'2' Dependent"
+        
+        # Sponsor ID Type
+        output["Sponsor ID Type (Conditional)"] = "'1' Unified Number"
+        
+        # Membership Card
+        output["Membership Card No (Optional)"] = safe_get("Card Number")
+        
+        # Emirates of Visa
+        emirate = safe_get("Emirate-VisaIssued")
+        if isinstance(emirate, str):
+            emirate = emirate.lower()
+            if "abu dhabi" in emirate:
+                output["Emirates of Visa"] = "'1' ABUDHABI"
+            elif "dubai" in emirate:
+                output["Emirates of Visa"] = "'2' DUBAI"
+            elif "sharjah" in emirate:
+                output["Emirates of Visa"] = "'3' SHARJAH"
+            elif "ajman" in emirate:
+                output["Emirates of Visa"] = "'4' AJMAN"
+            elif "umm al quwain" in emirate:
+                output["Emirates of Visa"] = "'5' UMMALQUWAIN"
+            elif "ras al khaimah" in emirate:
+                output["Emirates of Visa"] = "'6' RASALKHAIMAH"
+            elif "fujairah" in emirate:
+                output["Emirates of Visa"] = "'7' FUJAIRAH"
+        
+        # Emirates of Living - copy from Emirates of Visa
+        output["Emirates of Living"] = output["Emirates of Visa"]
+        
+        # Log a few key mappings for debugging
+        logger.info(f"Mapped Policy Number: {output['Policy Number']}, First Name: {output['First Name En']}")
+        
+        return output

@@ -343,16 +343,25 @@ class WorkflowTester:
         """Select the appropriate template based on the email subject."""
         subject_lower = subject.lower()
         
+        if "icp" in subject_lower:
+            template = 'templates/icp.xlsx'
+            logger.info(f"Selected ICP template: {template}")
+            return template
+        
         # Check for Al Madallah first
         if any(term in subject_lower for term in ['al madallah', 'almadallah', 'madallah', 'al-madallah']):
             template = 'templates/al_madallah.xlsx'
             logger.info(f"Selected Al Madallah template: {template}")
             return template
-            
-        # Default to NAS template
-        template = 'templates/nas.xlsx'
-        logger.info(f"Selected NAS template (default): {template}")
-        return template
+        elif any(term in subject_lower for term in ['takaful']):
+            template = 'templates/takaful.xlsx'
+            logger.info(f"Selected Takaful template: {template}")
+            return template
+        # Keep default template for now (NAS)
+        else:
+            template = 'templates/nas.xlsx'
+            logger.info(f"Selected NAS template (default): {template}")
+            return template
     
     def _validate_templates(self):
         """Ensure all required templates exist."""
