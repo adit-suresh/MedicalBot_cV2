@@ -343,7 +343,7 @@ class WorkflowTester:
         """Select the appropriate template based on the email subject."""
         subject_lower = subject.lower()
         
-        if "icp" in subject_lower:
+        if any(term in subject_lower for term in ['icp', 'icp linking', 'icp-linking']):
             template = 'templates/icp.xlsx'
             logger.info(f"Selected ICP template: {template}")
             return template
@@ -3119,7 +3119,6 @@ class WorkflowTester:
             }
             
             
-    # This function needs to be fixed in test_complete_workflow.py to prevent the TypeError
 
     def _log_document_matches(self, document_paths, excel_data, extracted_data_by_document):
         """
