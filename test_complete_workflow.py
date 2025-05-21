@@ -1542,20 +1542,31 @@ class WorkflowTester:
 
                             # Check which documents were found and converted
                             logger.info(f"Documents found: {len(document_paths)}")
-                            for doc_type, doc_path in document_paths.items():
-                                if isinstance(doc_path, list):
-                                    for path in doc_path:
+                            for doc_type, doc_paths in document_paths.items():
+                                if isinstance(doc_paths, list):
+                                    # Handle list of paths
+                                    for path in doc_paths:
                                         logger.info(f"Document: {doc_type} - {os.path.basename(path)}")
+                                        
+                                        # Check if this specific path was converted from PDF to JPG
+                                        converted_dir = os.path.join(os.path.dirname(path), "converted")
+                                        if os.path.exists(converted_dir):
+                                            converted_files = [f for f in os.listdir(converted_dir) if f.endswith(".jpg")]
+                                            logger.info(f"  - Converted to {len(converted_files)} JPG files in {converted_dir}")
+                                        else:
+                                            logger.info(f"  - No conversion directory found")
                                 else:
-                                    logger.info(f"Document: {doc_type} - {os.path.basename(doc_path)}")
-                                
-                                # Check if it was converted from PDF to JPG
-                                converted_dir = os.path.join(os.path.dirname(doc_path), "converted")
-                                if os.path.exists(converted_dir):
-                                    converted_files = [f for f in os.listdir(converted_dir) if f.endswith(".jpg")]
-                                    logger.info(f"  - Converted to {len(converted_files)} JPG files in {converted_dir}")
-                                else:
-                                    logger.info(f"  - No conversion directory found")
+                                    # Handle single path
+                                    path = doc_paths  # Just rename for clarity
+                                    logger.info(f"Document: {doc_type} - {os.path.basename(path)}")
+                                    
+                                    # Check if it was converted from PDF to JPG
+                                    converted_dir = os.path.join(os.path.dirname(path), "converted")
+                                    if os.path.exists(converted_dir):
+                                        converted_files = [f for f in os.listdir(converted_dir) if f.endswith(".jpg")]
+                                        logger.info(f"  - Converted to {len(converted_files)} JPG files in {converted_dir}")
+                                    else:
+                                        logger.info(f"  - No conversion directory found")
 
                             # Log extracted data from documents
                             logger.info("Extracted data from documents:")

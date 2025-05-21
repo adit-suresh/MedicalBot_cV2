@@ -358,7 +358,7 @@ class GPTProcessor:
             elif doc_type == 'emirates_id':
                 extraction_prompt = """
                 Extract the following information from this Emirates ID card:
-                - emirates_id: The ID number in format 784-XXXX-XXXXXXX-X
+                - emirates_id: The ID number in format 784-XXXX-XXXXXXX-X (MUST CONTAIN THE HYPHENS)
                 - name_en: The full name in English
                 - name_ar: The full name in Arabic if present
                 - nationality: The person's nationality
@@ -370,26 +370,51 @@ class GPTProcessor:
                 """
             elif doc_type == 'visa':
                 extraction_prompt = """
-                Extract the following information from this visa/residence permit:
-                - entry_permit_no: The entry permit number (very important - look for "Entry Permit No", "File", "File No.")
-                - unified_no: The unified number (very important - look for "U.I.D No", "U.I.D", "UID", "Unified Number")
-                - file: The file number (may be labeled as "File" or "File No.")
-                - visa_file_number: The visa file number (should start with 10 or 20, often in format XXX/YYYY/ZZZZZ)
-                - full_name: The person's full name
-                - nationality: The person's nationality
-                - passport_number: The passport number
-                - date_of_birth: Birth date in DD/MM/YYYY format
-                - gender: Either "Male" or "Female" (not M or F)
+                YOUR MOST CRITICAL TASK IS TO EXTRACT THESE TWO DISTINCT NUMBERS:
+
+                1. unified_no (HIGHEST PRIORITY):
+                - CONTAINS ONLY DIGITS, NO SLASHES OR HYPHENS
+                - Usually 8-15 digits long (e.g., "12345678" or "784123456789321" etc.)
+                - Appears near text like "U.I.D. No.", "ID Number", "Unified No.", "Unified Number", or "UID"
+                - May be displayed as "UID: 12345678" or "Unified No: 12345678" or "241104237 : U.I.D No" or "784197228451752 : U.I.D No"
+                - IS COMPLETELY DIFFERENT FROM VISA FILE NUMBER
+                - NEVER includes slashes - if you see slashes, it's NOT the unified number
+                - OFTEN appears at the top part of the document
+
+                2. visa_file_number (SECOND HIGHEST PRIORITY):
+                - ALWAYS CONTAINS SLASHES in format XXX/YYYY/ZZ.... or XXX/YYYY/Z/......
+                - Examples: "201/2023/1234567" or "101/2024/987654"
+                - Usually labeled as "ENTRY PERMIT NO", "File", "File No", "Visa File Number"
+                - First section (before first slash) is often "201" (Dubai) or "101" (Abu Dhabi)
+                - ALWAYS has slashes separating the parts
+
+                CRITICAL: These are two different numbers. DO NOT extract one from the other.
+                NEVER create a unified_no by removing slashes from visa_file_number.
+                If you can't find the unified_no, use "." instead of guessing.
+
+  
+                Extract the following CRITICAL information from this visa/residence permit:
+                - entry_permit_no: The entry permit number (can be same as visa_file_number)
+                - unified_no: The unified number (digits only, NO SLASHES)
+                - visa_file_number: The visa file number (has SLASHES in it)
+                - full_name: The person's full name (HIGHEST PRIORITY)
+                - nationality: The person's nationality (CRITICAL)
+                - passport_number: The passport number (CRITICAL)
+                - date_of_birth: Birth date in DD/MM/YYYY format (CRITICAL)
+                - gender: "Male" or "Female" (CRITICAL)
                 - profession: The profession/occupation listed
                 - issue_date: Issue date in DD/MM/YYYY format
                 - expiry_date: Expiry date in DD/MM/YYYY format
                 - sponsor_name: The sponsor's name (employer)
+
                 
                 Pay special attention to accurately extracting:
-                1. The entry permit number - this is critical (may appear as "Entry Permit No", "File", or "File No.")
-                2. The unified number - this is critical (typically a 10-digit number WITHOUT slashes)
-                3. The full name
-                4. The passport number
+                
+                1. entry_permit_no - this is critical (may appear as "Entry Permit No", "File", or "File No.")
+                2. unified_no - this is critical (typically a 10-digit number WITHOUT slashes)
+                3. visa_file_number should contain '/' (slashes) and often starts with '20/' or '10/'
+                4. The full name
+                5. The passport number
                 
                 Note that the entry permit number and visa file number might be the same in some documents, and different in others.
                 The unified number is typically a 10-digit number WITHOUT slashes and often appears near "U.I.D No".
@@ -401,7 +426,7 @@ class GPTProcessor:
                 extraction_prompt = f"""
                 Extract all important information from this {doc_type} document.
                 Pay special attention to:
-                - Personal identification numbers (passport number, ID number, etc.)
+                - Personal identification numbers (passport number, emirated ID number, Visa File Number, Unified Number)
                 - Full name
                 - Dates (birth, issue, expiry)
                 - Nationality
@@ -610,22 +635,24 @@ class GPTProcessor:
                         processed['visa_file_number'] = file_value
                         logger.info(f"Using 'file' field as visa_file_number: {file_value}")
         
-        # Validate and fix unified_no vs visa_file_number
-        if 'unified_no' in processed and 'visa_file_number' in processed:
-            # Check if they might be swapped
-            unified = processed['unified_no']
-            visa_file = processed['visa_file_number']
+        # Validate unified_no vs visa_file_number 
+        if 'unified_no' in processed and '/' in processed['unified_no']:
+            logger.warning(f"Fixing incorrect unified_no with slashes: {processed['unified_no']}")
+            # Save the incorrect value in case we need it
+            incorrect_unified = processed['unified_no']
             
-            # Unified numbers are typically all digits and around 10 digits long
-            # Visa file numbers typically have format XXX/YYYY/ZZZZZ with slashes
-            
-            # If unified has slashes and visa_file doesn't, they might be swapped
-            if ('/' in unified and '/' not in visa_file and 
-                len(visa_file.replace('-', '').replace(' ', '')) >= 8):
-                # Swap them
-                processed['unified_no'] = visa_file
-                processed['visa_file_number'] = unified
-                logger.info("Swapped unified_no and visa_file_number as they appeared to be mixed up")
+            # Extract just digits
+            digits = ''.join(filter(str.isdigit, processed['unified_no']))
+            if len(digits) >= 8:
+                processed['unified_no'] = digits
+                logger.info(f"Extracted digits for unified_no: {digits}")
+            else:
+                processed['unified_no'] = self.DEFAULT_VALUE
+                
+            # If visa_file_number is not set, use the incorrect unified_no value
+            if 'visa_file_number' not in processed or processed['visa_file_number'] == self.DEFAULT_VALUE:
+                processed['visa_file_number'] = incorrect_unified
+                logger.info(f"Set visa_file_number from incorrect unified_no: {incorrect_unified}")
                 
         # Improve visa-related field extraction
         if doc_type == 'visa':
@@ -647,6 +674,38 @@ class GPTProcessor:
                 if field in processed and processed[field] != self.DEFAULT_VALUE:
                     processed['unified_no'] = processed[field]
                     logger.info(f"Set unified_no from {field}: {processed[field]}")
+                    
+        # Prevent unified_no from being derived from visa_file_number
+        if ('unified_no' in processed and 'visa_file_number' in processed and 
+            processed['unified_no'] != self.DEFAULT_VALUE and processed['visa_file_number'] != self.DEFAULT_VALUE):
+            # Check if unified_no looks like visa_file_number with slashes removed
+            unified = processed['unified_no']
+            visa_file = processed['visa_file_number']
+            visa_file_no_slashes = visa_file.replace('/', '')
+            
+            # If they're the same or very similar, the unified_no might be incorrect
+            if unified == visa_file_no_slashes or (len(unified) >= 8 and unified in visa_file_no_slashes):
+                logger.warning(f"CRITICAL ERROR: unified_no appears to be derived from visa_file_number")
+                logger.warning(f"  unified_no: {unified}")
+                logger.warning(f"  visa_file_number: {visa_file}")
+                logger.warning(f"  visa_file without slashes: {visa_file_no_slashes}")
+                
+                # Check if there's a more likely unified_no candidate elsewhere in the data
+                # Look for a 9-10 digit number that doesn't match the visa file pattern
+                for field, value in processed.items():
+                    if field not in ['unified_no', 'visa_file_number'] and value != self.DEFAULT_VALUE:
+                        # Look for patterns of numbers that could be unified numbers
+                        number_candidates = re.findall(r'\b\d{8,11}\b', str(value))
+                        for candidate in number_candidates:
+                            # If the candidate doesn't match the visa file number pattern
+                            if candidate != visa_file_no_slashes and len(candidate) >= 8:
+                                logger.info(f"Found potential unified_no candidate in {field}: {candidate}")
+                                processed['unified_no'] = candidate
+                                return processed
+                                
+                # If no better candidate found, set to default value to avoid using incorrect data
+                processed['unified_no'] = self.DEFAULT_VALUE
+                logger.warning("Set unified_no to default value to avoid using incorrect data")
         
         return processed
 
