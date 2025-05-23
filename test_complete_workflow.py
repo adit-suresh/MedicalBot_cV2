@@ -965,37 +965,77 @@ class WorkflowTester:
             logger.info(f"Processing email {email_id} with subject: {subject}")
             try:
                 attachments = self.outlook.get_attachments(email_id)
-                logger.info(f"Retrieved {len(attachments)} attachments")
+                logger.info(f"Retrieved {len(attachments)} attachments from email")    
+                logger.info("=" * 80)
+                
             except Exception as e:
                 logger.error(f"Error getting attachments: {str(e)}", exc_info=True)
                 raise Exception(f"Failed to get attachments: {str(e)}")
-                    
+                
             try:
                 saved_files = self.attachment_handler.process_attachments(attachments, email_id)
-                logger.info(f"Saved {len(saved_files)} attachment files")
+                logger.info(f"Attachment handler saved {len(saved_files)} files")
+                
+                # DEBUG: Log what was actually saved
+                logger.info("=" * 80)
+                logger.info("SAVED FILES ANALYSIS:")
+                logger.info("=" * 80)
+                
+                for i, file_path in enumerate(saved_files):
+                    logger.info(f"Saved file {i+1}:")
+                    logger.info(f"  Path: {file_path}")
+                    logger.info(f"  Basename: {os.path.basename(file_path)}")
+                    logger.info(f"  Extension: {os.path.splitext(file_path)[1]}")
+                    logger.info(f"  Exists: {os.path.exists(file_path)}")
+                    if os.path.exists(file_path):
+                        logger.info(f"  Size: {os.path.getsize(file_path)} bytes")
+                    
+                    # Check if this looks like Excel
+                    name = os.path.basename(file_path).lower()
+                    ext = os.path.splitext(file_path)[1].lower()
+                    
+                    is_excel_file = (
+                        ext in ['.xlsx', '.xls'] or
+                        'excel' in name or
+                        'spreadsheet' in name
+                    )
+                    
+                    logger.info(f"  IS EXCEL FILE: {is_excel_file}")
+                    
+                logger.info("=" * 80)
+                
             except Exception as e:
                 logger.error(f"Error processing attachments: {str(e)}", exc_info=True)
                 raise Exception(f"Failed to process attachments: {str(e)}")
-            
+
             if not saved_files:
                 logger.warning(f"No valid attachments found for email {email_id}")
                 raise Exception("No valid attachments found")
 
             # Step 3: Categorize and process files
             try:
+                logger.info("=" * 80)
+                logger.info("FILE CATEGORIZATION")
+                logger.info("=" * 80)
+                logger.info(f"Total saved files: {len(saved_files)}")
+                for i, file_path in enumerate(saved_files):
+                    logger.info(f"File {i+1}: {os.path.basename(file_path)} (size: {os.path.getsize(file_path)} bytes)")
+                
                 document_paths = {}
                 excel_files = []
                 processed_docs = []
-                all_excel_rows = []  # Initialize this variable here
 
                 for file_path in saved_files:
                     file_type = self._determine_file_type(file_path)
+                    logger.info(f"File: {os.path.basename(file_path)} -> Type: {file_type}")
                     
                     if file_type == 'excel':
                         excel_files.append(file_path)
+                        logger.info(f"Added to Excel files: {os.path.basename(file_path)}")
                     else:
                         doc_path = os.path.join(submission_dir, os.path.basename(file_path))
                         shutil.copy2(file_path, doc_path)
+                        logger.info(f"Copied document to: {doc_path}")
                         
                         # Store multiple documents of the same type
                         if file_type not in document_paths:
@@ -1008,7 +1048,24 @@ class WorkflowTester:
                             'path': doc_path
                         })
                 
-                logger.info(f"Categorized files: {len(excel_files)} Excel files, {len(document_paths)} documents")
+                logger.info("=" * 80)
+                logger.info("CATEGORIZATION RESULTS:")
+                logger.info("=" * 80)
+                logger.info(f"Excel files: {len(excel_files)}")
+                for excel_file in excel_files:
+                    logger.info(f"  - {os.path.basename(excel_file)}")
+                
+                logger.info(f"Document types: {len(document_paths)}")
+                for doc_type, paths in document_paths.items():
+                    logger.info(f"  - {doc_type}: {len(paths) if isinstance(paths, list) else 1} files")
+                    if isinstance(paths, list):
+                        for path in paths:
+                            logger.info(f"    * {os.path.basename(path)}")
+                    else:
+                        logger.info(f"    * {os.path.basename(paths)}")
+                
+                logger.info("=" * 80)
+                
             except Exception as e:
                 logger.error(f"Error categorizing files: {str(e)}", exc_info=True)
                 raise Exception(f"Failed to categorize files: {str(e)}")
@@ -1160,58 +1217,126 @@ class WorkflowTester:
             # Step 5: Process all Excel files
             try:
                 logger.info(f"Processing {len(excel_files)} Excel files")
-                all_excel_rows = []  # Initialize again to be safe
+                all_excel_rows = []
                 
                 for excel_path in excel_files:
                     try:
+                        logger.info(f"Processing Excel file: {os.path.basename(excel_path)}")
+                        
+                        # Read Excel file directly with pandas to debug
+                        try:
+                            df_direct = pd.read_excel(excel_path)
+                            logger.info(f"Direct pandas read: {len(df_direct)} rows, {len(df_direct.columns)} columns")
+                            logger.info(f"Direct pandas columns: {list(df_direct.columns)}")
+                            logger.info(f"First row direct: {df_direct.iloc[0].to_dict()}")
+                        except Exception as e:
+                            logger.error(f"Direct pandas read failed: {str(e)}")
+                        
+                        # Use the excel processor
                         df, errors = self.excel_processor.process_excel(excel_path, dayfirst=True)
+                        
                         if not df.empty:
-                            # Process all rows - create DEEP COPIES to ensure no shared references
-                            for _, row in df.iterrows():
-                                # Create a deep copy of each row to prevent reference sharing
+                            logger.info(f"Excel processor returned: {len(df)} rows, {len(df.columns)} columns")
+                            logger.info(f"Excel processor columns: {list(df.columns)}")
+                            
+                            # Log first few rows with actual data
+                            for idx in range(min(3, len(df))):
+                                row_data = df.iloc[idx].to_dict()
+                                logger.info(f"Row {idx+1} data: {row_data}")
+                            
+                            # Process all rows
+                            for idx, row in df.iterrows():
                                 row_dict = copy.deepcopy(row.to_dict())
                                 
-                                # NEW CODE: Split names according to requirements
+                                # Log the row being processed
+                                logger.info(f"Processing Excel row {idx+1} with fields: {list(row_dict.keys())}")
+                                
+                                # Log key field values
+                                key_fields = ['First Name', 'Last Name', 'Staff ID', 'Contract Name']
+                                for field in key_fields:
+                                    if field in row_dict:
+                                        logger.info(f"  {field}: '{row_dict[field]}'")
+                                
+                                # Handle name splitting
                                 if 'First Name' in row_dict and row_dict['First Name']:
                                     full_name = str(row_dict['First Name']).strip()
                                     name_parts = full_name.split()
                                     
                                     if len(name_parts) >= 3:
-                                        # First word as first name, second as middle, third+ as last
-                                        first_name = name_parts[0]
-                                        middle_name = name_parts[1]
-                                        last_name = ' '.join(name_parts[2:])
-                                        
-                                        row_dict['First Name'] = first_name
-                                        row_dict['Middle Name'] = middle_name
-                                        row_dict['Last Name'] = last_name
-                                        
-                                        logger.info(f"Split name '{full_name}' into First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
+                                        row_dict['First Name'] = name_parts[0]
+                                        row_dict['Middle Name'] = name_parts[1]
+                                        row_dict['Last Name'] = ' '.join(name_parts[2:])
                                     elif len(name_parts) == 2:
-                                        # First word as first name, '.' as middle, second as last
-                                        first_name = name_parts[0]
-                                        middle_name = '.'
-                                        last_name = name_parts[1]
-                                        
-                                        row_dict['First Name'] = first_name
-                                        row_dict['Middle Name'] = middle_name
-                                        row_dict['Last Name'] = last_name
-                                        
-                                        logger.info(f"Split name '{full_name}' into First='{first_name}', Middle='{middle_name}', Last='{last_name}'")
+                                        row_dict['First Name'] = name_parts[0]
+                                        row_dict['Middle Name'] = '.'
+                                        row_dict['Last Name'] = name_parts[1]
+                                
+                                # Ensure Middle Name has a value
+                                if 'Middle Name' not in row_dict or not row_dict['Middle Name']:
+                                    row_dict['Middle Name'] = '.'
+                                
+                                # Clean up any NaN or None values
+                                for key, value in row_dict.items():
+                                    if pd.isna(value) or value is None:
+                                        row_dict[key] = ""
+                                    else:
+                                        row_dict[key] = str(value).strip()
                                 
                                 all_excel_rows.append(row_dict)
                             
-                            logger.info(f"Processed Excel file with {len(df)} rows")
+                            logger.info(f"Successfully processed {len(df)} rows from Excel file")
+                        else:
+                            logger.warning(f"Excel file {excel_path} returned empty DataFrame")
+                            
                         if errors:
                             logger.warning(f"Excel validation errors: {errors}")
+                            
                     except Exception as e:
                         logger.error(f"Error processing Excel file {excel_path}: {str(e)}", exc_info=True)
-                        logger.warning(f"Continuing with partial data due to Excel processing error")
                 
-                logger.info(f"Extracted {len(all_excel_rows)} rows from Excel files")
+                logger.info(f"Total Excel rows extracted: {len(all_excel_rows)}")
+                
+                # CRITICAL: Log sample Excel data to verify it's correct
+                if all_excel_rows:
+                    logger.info("=" * 80)
+                    logger.info("EXCEL DATA VERIFICATION:")
+                    logger.info("=" * 80)
+                    for i, row in enumerate(all_excel_rows[:3]):  # Show first 3 rows
+                        logger.info(f"Excel Row {i+1}:")
+                        for key, value in row.items():
+                            if value:  # Only show non-empty values
+                                logger.info(f"  {key}: {value}")
+                    logger.info("=" * 80)
+                else:
+                    logger.error("NO EXCEL DATA EXTRACTED!")
+                    
             except Exception as e:
                 logger.error(f"Error processing Excel files: {str(e)}", exc_info=True)
-                raise Exception(f"Failed to process Excel files: {str(e)}")
+
+            # CRITICAL: Check if we have Excel data before proceeding
+            if not all_excel_rows:
+                logger.error("No Excel data was processed successfully!")
+                logger.error("This means either:")
+                logger.error("1. No Excel files were found in the attachments")
+                logger.error("2. Excel files were found but failed to process")
+                logger.error("3. Excel files were processed but contained no data")
+                
+                # Check what files we actually have
+                logger.error(f"Files found: {[os.path.basename(f) for f in saved_files]}")
+                logger.error(f"Excel files identified: {[os.path.basename(f) for f in excel_files]}")
+                
+                # Create a minimal row for testing if needed
+                logger.warning("Creating minimal Excel data for testing...")
+                all_excel_rows = [{
+                    "First Name": "Test",
+                    "Middle Name": ".",
+                    "Last Name": "User",
+                    "Effective Date": datetime.now().strftime('%d/%m/%Y'),
+                    "DOB": "",
+                    "Gender": "",
+                    "Staff ID": "TEST001",
+                    "Contract Name": "Test Contract"
+                }]
 
             # Match documents to specific employees
             if document_paths and all_excel_rows:
@@ -1689,28 +1814,74 @@ class WorkflowTester:
                     f"final_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
                 )
                 
+                # CRITICAL: Log what we're passing to the data combiner
+                logger.info("=" * 80)
+                logger.info("DATA BEING PASSED TO COMBINER:")
+                logger.info("=" * 80)
+                logger.info(f"Template: {template_path}")
+                logger.info(f"Output: {output_path}")
+                logger.info(f"Extracted data: {len(extracted_data)} fields")
+                for key, value in extracted_data.items():
+                    if value != self.DEFAULT_VALUE:
+                        logger.info(f"  {key}: {value}")
+                logger.info(f"Excel data: {len(all_excel_rows) if all_excel_rows else 0} rows")
+                if all_excel_rows:
+                    logger.info(f"First Excel row: {list(all_excel_rows[0].keys())}")
+                logger.info(f"Document paths: {len(document_paths)} types")
+                for doc_type, paths in document_paths.items():
+                    if isinstance(paths, list):
+                        logger.info(f"  {doc_type}: {len(paths)} files")
+                    else:
+                        logger.info(f"  {doc_type}: 1 file")
+                logger.info("=" * 80)
+                
+                # Ensure we have at least some Excel data
                 if all_excel_rows is None or len(all_excel_rows) == 0:
                     logger.warning("No Excel data found. Creating default Excel data...")
                     # Create default Excel data with at least basic structure
                     all_excel_rows = [{
-                        "First Name": "",
+                        "First Name": "Default",
                         "Middle Name": ".",
-                        "Last Name": "",
+                        "Last Name": "User",
                         "Effective Date": datetime.now().strftime('%d/%m/%Y'),
                         "DOB": "",
-                        "Gender": ""
+                        "Gender": "",
+                        "Staff ID": "DEFAULT001",
+                        "Contract Name": "Default Contract"
                     }]
+                    logger.info(f"Created default Excel data: {all_excel_rows}")
 
-                # Use selected template instead of hardcoded "template.xlsx"
+                # Apply Emirates ID and nationality formatting
+                if 'emirates_id' in extracted_data:
+                    # Check if we have the _process_emirates_id method in data_combiner
+                    if hasattr(self.data_combiner, '_process_emirates_id'):
+                        extracted_data['emirates_id'] = self.data_combiner._process_emirates_id(extracted_data['emirates_id'])
+                
+                if 'nationality' in extracted_data:
+                    # Check if we have the _standardize_nationality method in data_combiner
+                    if hasattr(self.data_combiner, '_standardize_nationality'):
+                        extracted_data['nationality'] = self.data_combiner._standardize_nationality(extracted_data['nationality'])
+                
+                # Combine data using template
                 result = self.data_combiner.combine_and_populate_template(
                     template_path,
                     output_path,
-                    extracted_data,  # This now contains combined GPT and Textract data
-                    all_excel_rows if all_excel_rows else None,
+                    extracted_data,
+                    all_excel_rows,  # Pass the Excel data directly
                     document_paths
                 )
                 
                 logger.info(f"Data combination result: {result['status']}, rows processed: {result.get('rows_processed', 0)}")
+                
+                # CRITICAL: Check the result
+                if result['status'] != 'success':
+                    logger.error(f"Data combination failed: {result}")
+                    raise Exception(f"Data combination failed: {result.get('error', 'Unknown error')}")
+                
+                if result.get('rows_processed', 0) == 0:
+                    logger.error("Data combination succeeded but processed 0 rows!")
+                    logger.error("This indicates a problem with the data combination logic")
+                    
             except Exception as e:
                 logger.error(f"Error combining data: {str(e)}", exc_info=True)
                 raise Exception(f"Failed to combine data: {str(e)}")

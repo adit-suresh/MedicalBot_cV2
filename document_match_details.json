@@ -1,3 +1,77 @@
 {
-  "0": []
+  "0": [
+    {
+      "doc_key": "emirates_id_Amar_EID.jpeg",
+      "score": 74,
+      "reasons": [
+        "Name similarity: 0.25 (amar mehta kewal krishnan mehta \u2248 KEWAL)",
+        "Name similarity: 0.25 (amar mehta kewal krishnan mehta \u2248 KRISHNAN)",
+        "Name similarity: 0.50 (amar mehta kewal krishnan mehta \u2248 KEWAL KRISHNAN)",
+        "Name similarity: 0.50 (amar mehta kewal krishnan mehta \u2248 KEWAL . KRISHNAN)"
+      ]
+    },
+    {
+      "doc_key": "emirates_id_Kewal_EID.jpeg",
+      "score": 60,
+      "reasons": [
+        "Name similarity: 0.20 (kewal krishnan mehta sham dass mehta \u2248 KEWAL)",
+        "Name similarity: 0.20 (kewal krishnan mehta sham dass mehta \u2248 KRISHNAN)",
+        "Name similarity: 0.40 (kewal krishnan mehta sham dass mehta \u2248 KEWAL KRISHNAN)",
+        "Name similarity: 0.40 (kewal krishnan mehta sham dass mehta \u2248 KEWAL . KRISHNAN)"
+      ]
+    },
+    {
+      "doc_key": "visa_Amar_Golden_Visa_Copy.jpeg",
+      "score": 74,
+      "reasons": [
+        "Name similarity: 0.25 (amar mehta kewal krishnan mehta \u2248 KEWAL)",
+        "Name similarity: 0.25 (amar mehta kewal krishnan mehta \u2248 KRISHNAN)",
+        "Name similarity: 0.50 (amar mehta kewal krishnan mehta \u2248 KEWAL KRISHNAN)",
+        "Name similarity: 0.50 (amar mehta kewal krishnan mehta \u2248 KEWAL . KRISHNAN)"
+      ]
+    },
+    {
+      "doc_key": "visa_Kewal_Golden_Visa_Copy_.jpeg",
+      "score": 60,
+      "reasons": [
+        "Name similarity: 0.20 (kewal krishnan mehta sham dass mehta \u2248 KEWAL)",
+        "Name similarity: 0.20 (kewal krishnan mehta sham dass mehta \u2248 KRISHNAN)",
+        "Name similarity: 0.40 (kewal krishnan mehta sham dass mehta \u2248 KEWAL KRISHNAN)",
+        "Name similarity: 0.40 (kewal krishnan mehta sham dass mehta \u2248 KEWAL . KRISHNAN)"
+      ]
+    },
+    {
+      "doc_key": "unknown_Consultancy_Agreement-Kewal_Mehta.pdf",
+      "score": 60,
+      "reasons": [
+        "Name similarity: 0.20 (kewal krishnan mehta sham dass mehta \u2248 KEWAL)",
+        "Name similarity: 0.20 (kewal krishnan mehta sham dass mehta \u2248 KRISHNAN)",
+        "Name similarity: 0.40 (kewal krishnan mehta sham dass mehta \u2248 KEWAL KRISHNAN)",
+        "Name similarity: 0.40 (kewal krishnan mehta sham dass mehta \u2248 KEWAL . KRISHNAN)"
+      ]
+    }
+  ],
+  "1": [
+    {
+      "doc_key": "visa_Asel_Golden_Visa_Copy.jpeg",
+      "score": 74,
+      "reasons": [
+        "Name similarity: 0.25 (asel ismail sharari almajali \u2248 ASEL)",
+        "Name similarity: 0.25 (asel ismail sharari almajali \u2248 ISMAIL)",
+        "Name similarity: 0.50 (asel ismail sharari almajali \u2248 ASEL ISMAIL)",
+        "Name similarity: 0.50 (asel ismail sharari almajali \u2248 ASEL . ISMAIL)"
+      ]
+    },
+    {
+      "doc_key": "unknown_Asel_PP_Copy.jpeg",
+      "score": 74,
+      "reasons": [
+        "Name similarity: 0.25 (asel ismail sharrar almajali \u2248 ASEL)",
+        "Name similarity: 0.25 (asel ismail sharrar almajali \u2248 ISMAIL)",
+        "Name similarity: 0.50 (asel ismail sharrar almajali \u2248 ASEL ISMAIL)",
+        "Name similarity: 0.50 (asel ismail sharrar almajali \u2248 ASEL . ISMAIL)"
+      ]
+    }
+  ],
+  "2": []
 }

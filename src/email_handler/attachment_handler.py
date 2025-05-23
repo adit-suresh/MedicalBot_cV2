@@ -39,10 +39,10 @@ class AttachmentHandler:
     def is_valid_attachment(self, attachment: Dict) -> bool:
         """
         Validate attachment type and name with enhanced security checks.
-        
+
         Args:
             attachment: Attachment dictionary from Graph API
-            
+
         Returns:
             bool: Whether attachment is valid
         """
@@ -50,10 +50,10 @@ class AttachmentHandler:
         if not name:
             logger.warning("Attachment has no name")
             return False
-            
+
         # Get file extension
         file_ext = os.path.splitext(name)[1].lower()
-        
+
         # Check attachment size
         size = attachment.get("size", 0)
         if size == 0:
@@ -62,12 +62,12 @@ class AttachmentHandler:
         elif size > 25 * 1024 * 1024:  # 25MB limit
             logger.warning(f"Attachment {name} exceeds size limit (25MB)")
             return False
-            
+
         # Log validation steps
         logger.debug(f"Validating attachment: {name}")
         logger.debug(f"File extension: {file_ext}")
         logger.debug(f"File size: {size/1024:.1f} KB")
-        
+
         # Check file extension against allowed types
         valid_extension = any(file_ext.endswith(ext.lower()) for ext in ATTACHMENT_TYPES)
         if not valid_extension:
@@ -79,7 +79,7 @@ class AttachmentHandler:
         if not valid_pattern:
             logger.debug(f"Filename {name} doesn't match security pattern {FILE_NAME_PATTERN.pattern}")
             return False
-            
+
         # Check for potentially malicious file names
         if self._is_potentially_dangerous_filename(name):
             logger.warning(f"Potentially dangerous filename detected: {name}")
@@ -266,36 +266,62 @@ class AttachmentHandler:
     def process_attachments(self, attachments: List[Dict], email_id: str) -> List[str]:
         """
         Process and save all valid attachments from an email with enhanced error handling.
-        
-        Args:
-            attachments: List of attachment dictionaries
-            email_id: ID of the email
-            
-        Returns:
-            List[str]: Paths of saved attachments
-            
-        Raises:
-            AttachmentError: If processing attachments fails
         """
         saved_paths = []
         skipped = 0
         errors = 0
+        
+        # DEBUG: Log all incoming attachments first
+        logger.info("=" * 80)
+        logger.info(f"ATTACHMENT HANDLER DEBUG - Email {email_id}")
+        logger.info("=" * 80)
+        logger.info(f"Total attachments received: {len(attachments)}")
+        
+        for i, attachment in enumerate(attachments):
+            name = attachment.get("name", "unknown")
+            content_type = attachment.get("contentType", "unknown")
+            size = attachment.get("size", 0)
+            is_inline = attachment.get("isInline", False)
+            
+            logger.info(f"Attachment {i+1}:")
+            logger.info(f"  Name: {name}")
+            logger.info(f"  Content-Type: {content_type}")
+            logger.info(f"  Size: {size}")
+            logger.info(f"  IsInline: {is_inline}")
+            
+            # Check if this looks like Excel
+            looks_like_excel = (
+                name.lower().endswith(('.xlsx', '.xls')) or
+                'excel' in content_type.lower() or
+                'spreadsheet' in content_type.lower()
+            )
+            logger.info(f"  LOOKS LIKE EXCEL: {looks_like_excel}")
+            
+            # Show all attachment properties for debugging
+            logger.info(f"  All properties: {list(attachment.keys())}")
+        
+        logger.info("=" * 80)
         
         for attachment in attachments:
             name = attachment.get("name", "unknown")
             try:
                 logger.info(f"Processing attachment: {name}")
                 
-                # Skip attachments that are inline images (often signatures)
+                # DEBUG: Check inline first
                 if attachment.get("isInline", False):
-                    logger.info(f"Skipping inline attachment: {name}")
+                    logger.info(f"SKIPPED: Inline attachment: {name}")
                     skipped += 1
                     continue
                 
-                if self.is_valid_attachment(attachment):
+                # DEBUG: Check if valid
+                is_valid = self.is_valid_attachment(attachment)
+                logger.info(f"is_valid_attachment({name}) returned: {is_valid}")
+                
+                if is_valid:
+                    logger.info(f"ATTEMPTING TO SAVE: {name}")
                     path = self.save_attachment(attachment, email_id)
                     saved_paths.append(path)
-                    logger.info(f"Successfully processed: {name}")
+                    logger.info(f"SUCCESS: Saved {name} to {path}")
                     
                     if name.lower().endswith('.zip'):
                         logger.info(f"Processing ZIP file: {name}")
@@ -311,23 +337,30 @@ class AttachmentHandler:
                             logger.error(f"Failed to process ZIP file {name}: {str(e)}")
                     
                 else:
-                    logger.info(f"Skipping invalid attachment: {name}")
+                    logger.warning(f"SKIPPED: Invalid attachment: {name}")
+                    logger.warning(f"  This might be why Excel files aren't being saved!")
                     skipped += 1
                     
             except AttachmentError as e:
-                logger.error(f"Failed to save {name}: {str(e)}")
+                logger.error(f"AttachmentError saving {name}: {str(e)}")
                 errors += 1
                 continue
             except Exception as e:
-                logger.error(f"Unexpected error processing {name}: {str(e)}")
+                logger.error(f"Unexpected error processing {name}: {str(e)}", exc_info=True)
                 errors += 1
                 continue
                 
         # Log summary
-        logger.info(f"Attachment processing complete for email {email_id}:")
+        logger.info("=" * 80)
+        logger.info(f"ATTACHMENT PROCESSING SUMMARY for email {email_id}:")
+        logger.info(f"  Total received: {len(attachments)}")
         logger.info(f"  Successfully saved: {len(saved_paths)}")
         logger.info(f"  Skipped (invalid): {skipped}")
         logger.info(f"  Errors: {errors}")
+        logger.info("Saved files:")
+        for path in saved_paths:
+            logger.info(f"  - {os.path.basename(path)}")
+        logger.info("=" * 80)
         
         # If we couldn't process any attachments, that's a problem
         if not saved_paths and (skipped > 0 or errors > 0):

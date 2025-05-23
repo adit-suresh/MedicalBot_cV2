@@ -8,4 +8,4 @@ PASSPORT_NUMBER_PATTERN = re.compile(r'^[A-Z0-9]{6,9}$')
 SUBJECT_KEYWORDS = ["addition", "adding", "add", "endorse", "endorsement", "include", "Addition"]
 
 # File naming patterns
-FILE_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9\s\-_.,()\']+\.[a-zA-Z0-9]+$')
+FILE_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9\s\-_.,()\'&]+\.[a-zA-Z0-9]+$')
