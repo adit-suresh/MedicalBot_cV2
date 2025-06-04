@@ -348,6 +348,12 @@ class WorkflowTester:
             template = 'templates/al_madallah.xlsx'
             logger.info(f"Selected Al Madallah template: {template}")
             return template
+        
+        # Check for Takaful
+        elif any(term in subject_lower for term in ['takaful', 'takaaful', 'takaful emarat']):
+            template = 'templates/takaful.xlsx'
+            logger.info(f"Selected Takaful template: {template}")
+            return template
             
         # Default to NAS template
         template = 'templates/nas.xlsx'

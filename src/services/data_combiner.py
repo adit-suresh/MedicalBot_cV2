@@ -2552,6 +2552,10 @@ class DataCombiner:
         for col in template_columns:
             mapped[col] = ""
         
+         # Detect template type based on columns
+        is_almadallah = any(col in template_columns for col in ['POLICYCATEGORY', 'ENTITYID', 'POLICYSEQUENCE', 'FIRSTNAME', 'MIDDLENAME', 'LASTNAME'])
+        is_takaful = any(col in template_columns for col in ['StaffNo', 'PrincipalName', 'FirstName', 'SecondName', 'LastName', 'EIDNumber', 'ResidentFileNumber'])
+        
         # Direct copy of critical fields - these should override any other mapping
         critical_fields = {
             'unified_no': 'Unified No',
@@ -2571,6 +2575,35 @@ class DataCombiner:
                     mapped[target] = data[source]
                     logger.info(f"TEMPLATE MAP: {source} → {target}: {data[source]}")
         
+        
+        # Add Takaful-specific critical field mappings
+        if is_takaful:
+            takaful_critical_fields = {
+                'emirates_id': 'EIDNumber',
+                'Emirates Id': 'EIDNumber',
+                'passport_number': 'PassportNum',
+                'passport_no': 'PassportNum',
+                'Passport No': 'PassportNum',
+                'unified_no': 'UIDNo',
+                'Unified No': 'UIDNo',
+                'visa_file_number': 'ResidentFileNumber',
+                'Visa File Number': 'ResidentFileNumber',
+                'nationality': 'Country',
+                'Nationality': 'Country',
+                'date_of_birth': 'DOB',
+                'dob': 'DOB',
+                'DOB': 'DOB',
+                'gender': 'Gender',
+                'Gender': 'Gender'
+            }
+            
+            # Apply Takaful critical mappings
+            for source, target in takaful_critical_fields.items():
+                if source in data and data[source] != self.DEFAULT_VALUE and data[source] != "":
+                    if target in template_columns:
+                        mapped[target] = data[source]
+                        logger.info(f"TAKAFUL CRITICAL MAP: {source} → {target}: {data[source]}")
+        
         # Copy all existing Excel data first to preserve it
         for key, value in data.items():
             if key in template_columns:
@@ -2580,6 +2613,8 @@ class DataCombiner:
         
         # Detect template type based on columns - check for Al Madallah specific fields
         is_almadallah = any(col in template_columns for col in ['POLICYCATEGORY', 'ENTITYID', 'POLICYSEQUENCE', 'FIRSTNAME', 'MIDDLENAME', 'LASTNAME'])
+        is_takaful = any(col in template_columns for col in ['StaffNo', 'PrincipalName', 'FirstName', 'SecondName', 'LastName', 'EIDNumber', 'ResidentFileNumber'])
+        
         if is_almadallah:
             logger.info("=" * 80)
             logger.info("AL MADALLAH TEMPLATE DETECTED")
@@ -2744,6 +2779,151 @@ class DataCombiner:
                         mapped[field] = value
                         logger.info(f"Set default Al Madallah {field}: {value}")
                         
+        elif is_takaful:
+            logger.info("=" * 80)
+            logger.info("TAKAFUL TEMPLATE DETECTED")
+            logger.info("=" * 80)
+            logger.info(f"Template has {len(template_columns)} columns")
+            
+            # Takaful specific mappings
+            takaful_mappings = {
+                'StaffNo': ['staff_id', 'Staff ID', 'employee_id'],
+                'PrincipalName': ['principal_name', 'Principal Name'],
+                'PrincipalCardNo': ['principal_card_no', 'Principal Card No.'],
+                'CardNo': ['card_no', 'Card No'],
+                'PhotoName': ['photo_name', 'Photo Name'],
+                'FirstName': ['first_name', 'First Name', 'given_names'],
+                'SecondName': ['middle_name', 'Middle Name'],
+                'LastName': ['last_name', 'Last Name', 'surname'],
+                'DOB': ['date_of_birth', 'dob', 'birth_date', 'DOB'],
+                'Gender': ['gender', 'sex', 'Gender'],
+                'Relation': ['relation', 'Relation'],
+                'Country': ['nationality', 'Nationality', 'citizenship'],
+                'MaritalStatus': ['marital_status', 'Marital Status'],
+                'Category': ['category', 'Category'],
+                'SubGroupDivision': ['subgroup_division', 'SubGroup Division', 'contract_name', 'Contract Name'],
+                'EffectiveDate': ['effective_date', 'Effective Date', 'start_date'],
+                'Emirate': ['visa_issuance_emirate', 'Visa Issuance Emirate'],
+                'EIDNumber': ['emirates_id', 'Emirates Id', 'eid'],
+                'Salary': ['salary', 'Salary', 'salary_band', 'Salary Band'],
+                'MobileNumber': ['mobile_no', 'Mobile No', 'phone'],
+                'EmailId': ['email', 'Email', 'email_address'],
+                'City': ['residence_emirate', 'Residence Emirate'],
+                'ResidentialLocation': ['residence_region', 'Residence Region'],
+                'WorkLocation': ['work_region', 'Work Region'],
+                'PassportNum': ['passport_number', 'passport_no', 'Passport No'],
+                'UIDNo': ['unified_no', 'Unified No', 'unified_number'],
+                'ResidentFileNumber': ['visa_file_number', 'Visa File Number', 'entry_permit_no'],
+                'Policy_Id': ['policy_id', 'Policy_Id'],
+                'EndorsementId': ['endorsement_id', 'EndorsementId'],
+                'DHPOMemberId': ['dhpo_member_id', 'DHPOMemberId'],
+                'BirthCertificateID': ['birth_certificate_id', 'BirthCertificateID'],
+                'EstablishmentEmail': ['company_mail', 'Company Mail', 'email'],
+                'RelationTo': ['relation_to', 'RelationTo'],
+                'EntityContactNumber': ['company_phone', 'Company Phone', 'mobile_no'],
+                'PolicySequence': ['policy_sequence', 'PolicySequence'],
+                'DHPOAgent_Id': ['dhpo_agent_id', 'DHPOAgent_Id'],
+                'DHPOErrorMessage': ['dhpo_error_message', 'DHPOErrorMessage'],
+                'COCRef': ['coc_ref', 'COCRef'],
+                'Penalty': ['penalty', 'Penalty'],
+                'COCError': ['coc_error', 'COCError'],
+                'COCCValiditydate': ['cocc_validity_date', 'COCCValiditydate'],
+                'COCNonInsuranceDays': ['coc_non_insurance_days', 'COCNonInsuranceDays'],
+                'COCStatus': ['coc_status', 'COCStatus'],
+                'PenaltyCalcType': ['penalty_calc_type', 'PenaltyCalcType']
+            }
+            
+            # Apply mappings for Takaful
+            for col in template_columns:
+                if col in takaful_mappings:
+                    for field_name in takaful_mappings[col]:
+                        if field_name in data and data[field_name] != self.DEFAULT_VALUE:
+                            mapped[col] = data[field_name]
+                            field_mappings[col] = field_name
+                            logger.info(f"Takaful mapping: {field_name} → {col}: {data[field_name]}")
+                            break
+            
+            # CRITICAL: Also check for direct template column names in data
+            # This ensures data from Excel and extracted documents both work
+            if col in data and data[col] != self.DEFAULT_VALUE:
+                mapped[col] = data[col]
+                field_mappings[col] = col
+            
+            # Relation - default to 'Principal' if empty
+            if 'Relation' in template_columns and (not mapped.get('Relation') or mapped.get('Relation') == ''):
+                mapped['Relation'] = 'Principal'
+                logger.info("Set default Relation: Principal")
+            
+            # Salary processing
+            if 'Salary' in template_columns and 'Salary' in mapped:
+                salary_value = mapped['Salary']
+                # If it's a number, convert to text description
+                try:
+                    salary_num = float(str(salary_value).replace(',', '').replace('AED', '').strip())
+                    if salary_num < 4000:
+                        mapped['Salary'] = 'less than 4000 AED/month'
+                    elif salary_num <= 12000:
+                        mapped['Salary'] = 'between 4001 AED and 12000 AED/month'
+                    else:
+                        mapped['Salary'] = 'more than 12000 AED/month'
+                except:
+                    # If not a number, keep as is
+                    pass
+            
+            # SalaryBand - depends on Salary
+            if 'SalaryBand' in template_columns and 'Salary' in mapped:
+                salary_text = mapped['Salary'].lower()
+                if 'less than 4000' in salary_text:
+                    mapped['SalaryBand'] = 'LSB'
+                else:
+                    mapped['SalaryBand'] = 'NLSB'
+                logger.info(f"Set SalaryBand based on Salary: {mapped['SalaryBand']}")
+            
+            # IsCommissionBasedSalary - always 'No'
+            if 'IsCommissionBasedSalary' in template_columns:
+                mapped['IsCommissionBasedSalary'] = 'No'
+            
+            # EntityType - always 'Establishment'
+            if 'EntityType' in template_columns:
+                mapped['EntityType'] = 'Establishment'
+            
+            # EntityId - always '230376/6'
+            if 'EntityId' in template_columns:
+                mapped['EntityId'] = '230376/6'
+            
+            # MemberType - based on ResidentFileNumber
+            if 'MemberType' in template_columns and 'ResidentFileNumber' in mapped:
+                resident_file = mapped['ResidentFileNumber']
+                if resident_file and resident_file.startswith('20'):
+                    mapped['MemberType'] = 'Expat who is residency is issued in Dubai'
+                else:
+                    mapped['MemberType'] = 'Expat who is residency is issued in Emirates other than Dubai'
+                logger.info(f"Set MemberType based on ResidentFileNumber: {mapped['MemberType']}")
+            
+            # Set emirate values based on visa file number
+            if 'ResidentFileNumber' in mapped and mapped['ResidentFileNumber'] != self.DEFAULT_VALUE:
+                visa_file = mapped['ResidentFileNumber']
+                digits = ''.join(filter(str.isdigit, str(visa_file)))
+                
+                if digits.startswith('20'):  # Dubai
+                    if 'Emirate' in template_columns:
+                        mapped['Emirate'] = 'Dubai'
+                    if 'City' in template_columns:
+                        mapped['City'] = 'Dubai'
+                    if 'ResidentialLocation' in template_columns:
+                        mapped['ResidentialLocation'] = 'DUBAI (DISTRICT UNKNOWN)'
+                    if 'WorkLocation' in template_columns:
+                        mapped['WorkLocation'] = 'DUBAI (DISTRICT UNKNOWN)'
+                elif digits.startswith('10'):  # Abu Dhabi
+                    if 'Emirate' in template_columns:
+                        mapped['Emirate'] = 'Abu Dhabi'
+                    if 'City' in template_columns:
+                        mapped['City'] = 'Abu Dhabi'
+                    if 'ResidentialLocation' in template_columns:
+                        mapped['ResidentialLocation'] = 'Al Ain City'
+                    if 'WorkLocation' in template_columns:
+                        mapped['WorkLocation'] = 'Al Ain City'
+        
         else:
             # If not Al Madallah, use general field mappings
             for col in template_columns:
@@ -2865,7 +3045,7 @@ class DataCombiner:
             normalized_col = self._normalize_column_name(col)
             
             # Only Middle Name should have '.' default
-            if normalized_col == 'middle_name':
+            if normalized_col == 'middle_name' or col in ['Middle Name', 'SecondName', 'MIDDLENAME']:
                 df[col] = df[col].apply(
                     lambda x: self.DEFAULT_VALUE if pd.isna(x) or x == '' or x == self.DEFAULT_VALUE else x
                 )
@@ -3151,6 +3331,23 @@ class DataCombiner:
                 row_data['Member Type'] = 'Expat whose residence issued other than Dubai'
                 row_data['MEMBERTYPE'] = 'Expat whose residence issued other than Dubai'
         
+        # Check if this is Takaful template
+        is_takaful = any(field in row_data for field in ['StaffNo', 'FirstName', 'SecondName', 'LastName', 'EIDNumber'])
+        
+        if is_takaful:
+            # Takaful-specific defaults
+            if 'Relation' in row_data and (not row_data['Relation'] or row_data['Relation'] == self.DEFAULT_VALUE):
+                row_data['Relation'] = 'Principal'
+            
+            if 'IsCommissionBasedSalary' in row_data:
+                row_data['IsCommissionBasedSalary'] = 'No'
+                
+            if 'EntityType' in row_data:
+                row_data['EntityType'] = 'Establishment'
+                
+            if 'EntityId' in row_data:
+                row_data['EntityId'] = '230376/6'
+        
         # Format Mobile No
         mobile_fields = ['Mobile No', 'MOBILE', 'COMPANYPHONENUMBER', 'LANDLINENO']
         for field in mobile_fields:
@@ -3179,7 +3376,7 @@ class DataCombiner:
         for col in row_data:
             col_lower = col.lower()
             # Only Middle Name gets default '.'
-            if 'middle' in col_lower and 'name' in col_lower:
+            if ('middle' in col_lower and 'name' in col_lower) or col in ['Middle Name', 'SecondName', 'MIDDLENAME']: 
                 if pd.isna(row_data[col]) or row_data[col] == '' or row_data[col] == DEFAULT_VALUE:
                     row_data[col] = '.'
             # All other fields should be empty rather than '.'
