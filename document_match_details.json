@@ -19,6 +19,15 @@
         "Name similarity: 0.33 (glenda aquino ganoza \u2248 GLENDA GANOSA)",
         "Name similarity: 0.67 (glenda aquino ganoza \u2248 GLENDA AQUINO GANOSA)"
       ]
+    },
+    {
+      "doc_key": "emirates_id_Glenda_EID_25.pdf",
+      "score": 65,
+      "reasons": [
+        "Name similarity: 0.33 (glenda aquino ganasa \u2248 GLENDA)",
+        "Name similarity: 0.33 (glenda aquino ganasa \u2248 GLENDA GANOSA)",
+        "Name similarity: 0.67 (glenda aquino ganasa \u2248 GLENDA AQUINO GANOSA)"
+      ]
     }
   ],
   "2": [
@@ -170,31 +179,11 @@
         "Name similarity: 1.00 (faiza lazib \u2248 FAIZA LAZIB)",
         "Name similarity: 0.67 (faiza lazib \u2248 FAIZA NAN LAZIB)"
       ]
-    },
-    {
-      "doc_key": "emirates_id_LAZIB_FAIZA_FAIZA_LAZIB_EMIRATES_ID_2025-2027.pdf",
-      "score": 133,
-      "reasons": [
-        "Name similarity: 0.50 (faiza lazib \u2248 FAIZA)",
-        "Name similarity: 0.50 (faiza lazib \u2248 LAZIB)",
-        "Name similarity: 1.00 (faiza lazib \u2248 FAIZA LAZIB)",
-        "Name similarity: 0.67 (faiza lazib \u2248 FAIZA NAN LAZIB)"
-      ]
     }
   ],
   "9": [
     {
       "doc_key": "unknown_joana.jpg",
-      "score": 74,
-      "reasons": [
-        "Name similarity: 0.25 (joana marie sunga dabi \u2248 JOANA)",
-        "Name similarity: 0.25 (joana marie sunga dabi \u2248 MARIE)",
-        "Name similarity: 0.50 (joana marie sunga dabi \u2248 JOANA MARIE)",
-        "Name similarity: 0.50 (joana marie sunga dabi \u2248 JOANA . MARIE)"
-      ]
-    },
-    {
-      "doc_key": "emirates_id_JOANE_MARIE_DABI_EMIRATES_ID_2025-2027.jpeg",
       "score": 74,
       "reasons": [
         "Name similarity: 0.25 (joana marie sunga dabi \u2248 JOANA)",
