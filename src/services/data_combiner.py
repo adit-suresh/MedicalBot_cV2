@@ -769,48 +769,48 @@ class DataCombiner:
             
             # Log what we have for this row
             logger.info(f"Processing Excel row {row_idx+1}:")
-            important_fields = ['FIRSTNAME', 'LASTNAME', 'EMPLOYEEID', 'FULLNAME', 'First Name', 'Last Name', 'Staff ID']
+            important_fields = ['FIRSTNAME', 'LASTNAME', 'EMPLOYEEID', 'FULLNAME', 'First Name', 'Last Name', 'Staff ID', 'FirstName', 'LastName', 'StaffNo']
             for field in important_fields:
                 if field in preserved_excel_data and preserved_excel_data[field]:
                     logger.info(f"  {field}: '{preserved_excel_data[field]}'")
             
-            # Get matched documents for this row
+            # Get matched documents for this row ONLY
             row_matches = matches.get(row_idx, [])
             
             if row_matches:
                 logger.info(f"Row {row_idx+1} matched with {len(row_matches)} documents")
                 
-                # Create a combined extracted data dictionary for this row
+                # Create a combined extracted data dictionary for THIS ROW ONLY
                 row_extracted = {}
                 
-                # Process each matched document
+                # Process each matched document for this specific row
                 for doc_key in row_matches:
                     doc_data = documents_data[doc_key]['data']
                     doc_type = documents_data[doc_key]['type']
                     
-                    logger.info(f"  - Applying data from {doc_key} (type: {doc_type})")
+                    logger.info(f"  - Applying data from {doc_key} (type: {doc_type}) to Row {row_idx+1} ONLY")
                     
                     # Special handling for visa documents
                     if doc_type.lower() == 'visa':
                         # Preserve visa file number exactly
                         if 'visa_file_number' in doc_data and doc_data['visa_file_number'] != DEFAULT_VALUE:
                             row_extracted['visa_file_number'] = doc_data['visa_file_number']
-                            logger.info(f"PRESERVED VISA FILE NUMBER: {doc_data['visa_file_number']}")
+                            logger.info(f"PRESERVED VISA FILE NUMBER for Row {row_idx+1}: {doc_data['visa_file_number']}")
                         
                         # Preserve unified number exactly
                         if 'unified_no' in doc_data and doc_data['unified_no'] != DEFAULT_VALUE:
                             # Validate format - should not contain slashes
                             if '/' not in doc_data['unified_no']:
                                 row_extracted['unified_no'] = doc_data['unified_no']
-                                logger.info(f"PRESERVED UNIFIED NUMBER: {doc_data['unified_no']}")
+                                logger.info(f"PRESERVED UNIFIED NUMBER for Row {row_idx+1}: {doc_data['unified_no']}")
                     
                     # Special handling for Emirates ID documents
                     if doc_type.lower() == 'emirates_id':
                         if 'emirates_id' in doc_data and doc_data['emirates_id'] != DEFAULT_VALUE:
                             row_extracted['emirates_id'] = doc_data['emirates_id']
-                            logger.info(f"PRESERVED EMIRATES ID: {doc_data['emirates_id']}")
+                            logger.info(f"PRESERVED EMIRATES ID for Row {row_idx+1}: {doc_data['emirates_id']}")
                     
-                    # Copy all non-default values from this document
+                    # Copy all non-default values from this document to THIS ROW ONLY
                     for field, value in doc_data.items():
                         if field not in row_extracted or (value != DEFAULT_VALUE and row_extracted[field] == DEFAULT_VALUE):
                             row_extracted[field] = value
@@ -831,48 +831,153 @@ class DataCombiner:
             if mapped_row is not None:
                 logger.info(f"Restoring Excel data for row {row_idx+1}:")
                 
-                # UNIVERSAL field mapping - works for BOTH templates
-                # Check if this is Al Madallah or NAS template
-                is_almadallah = 'FIRSTNAME' in template_columns
-                is_nas = 'First Name' in template_columns
+                # IMPROVED TEMPLATE DETECTION - More reliable
+                is_almadallah = 'FIRSTNAME' in template_columns or 'MIDDLENAME' in template_columns or 'LASTNAME' in template_columns
+                is_takaful = 'FirstName' in template_columns or 'SecondName' in template_columns or 'StaffNo' in template_columns
+                is_nas = 'First Name' in template_columns or 'Middle Name' in template_columns or 'Last Name' in template_columns
                 
-                if is_almadallah:
+                # Resolve conflicts - prioritize more specific templates
+                if is_almadallah and is_takaful:
+                    # Both detected - use more specific indicators
+                    if 'EMPLOYEEID' in template_columns or 'EMIRATESID' in template_columns:
+                        is_takaful = False  # Al Madallah wins
+                    elif 'StaffNo' in template_columns or 'EIDNumber' in template_columns:
+                        is_almadallah = False  # Takaful wins
+                
+                logger.info(f"Row {row_idx+1} template detection: NAS={is_nas}, Al Madallah={is_almadallah}, Takaful={is_takaful}")
+                
+                # TEMPLATE-SPECIFIC FIELD MAPPINGS
+                if is_takaful:
+                    # Takaful template field mapping
+                    excel_to_template_mapping = {
+                        'FirstName': 'FirstName',
+                        'First Name': 'FirstName',
+                        'FIRSTNAME': 'FirstName',
+                        'SecondName': 'SecondName', 
+                        'Middle Name': 'SecondName',
+                        'MIDDLENAME': 'SecondName',
+                        'LastName': 'LastName',
+                        'Last Name': 'LastName',
+                        'LASTNAME': 'LastName',
+                        'StaffNo': 'StaffNo',
+                        'Staff ID': 'StaffNo',
+                        'EMPLOYEEID': 'StaffNo',
+                        'DOB': 'DOB',
+                        'Gender': 'Gender',
+                        'GENDER': 'Gender',
+                        'Nationality': 'Country',
+                        'NATIONALITY': 'Country',
+                        'EIDNumber': 'EIDNumber',
+                        'Emirates Id': 'EIDNumber',
+                        'EMIRATESID': 'EIDNumber',
+                        'UIDNo': 'UIDNo',
+                        'Unified No': 'UIDNo',
+                        'UIDNO': 'UIDNo',
+                        'ResidentFileNumber': 'ResidentFileNumber',
+                        'Visa File Number': 'ResidentFileNumber',
+                        'VISAFILEREF': 'ResidentFileNumber',
+                        'PassportNum': 'PassportNum',
+                        'Passport No': 'PassportNum',
+                        'PASSPORTNO': 'PassportNum',
+                        'MobileNumber': 'MobileNumber',
+                        'Mobile No': 'MobileNumber',
+                        'MOBILE': 'MobileNumber',
+                        'EmailId': 'EmailId',
+                        'Email': 'EmailId',
+                        'EMAIL': 'EmailId',
+                        'EffectiveDate': 'EffectiveDate',
+                        'Effective Date': 'EffectiveDate',
+                        'EFFECTIVEDATE': 'EffectiveDate'
+                    }
+                elif is_almadallah:
                     # Al Madallah template field mapping
                     excel_to_template_mapping = {
                         'FIRSTNAME': 'FIRSTNAME',
+                        'First Name': 'FIRSTNAME',
+                        'FirstName': 'FIRSTNAME',
                         'MIDDLENAME': 'MIDDLENAME', 
+                        'Middle Name': 'MIDDLENAME',
+                        'SecondName': 'MIDDLENAME',
                         'LASTNAME': 'LASTNAME',
+                        'Last Name': 'LASTNAME',
+                        'LastName': 'LASTNAME',
                         'FULLNAME': 'FULLNAME',
                         'EMPLOYEEID': 'EMPLOYEEID',
+                        'Staff ID': 'EMPLOYEEID',
+                        'StaffNo': 'EMPLOYEEID',
                         'DOB': 'DOB',
                         'GENDER': 'GENDER',
+                        'Gender': 'GENDER',
                         'NATIONALITY': 'NATIONALITY',
+                        'Nationality': 'NATIONALITY',
+                        'Country': 'NATIONALITY',
                         'EMIRATESID': 'EMIRATESID',
+                        'Emirates Id': 'EMIRATESID',
+                        'EIDNumber': 'EMIRATESID',
                         'UIDNO': 'UIDNO',
+                        'Unified No': 'UIDNO',
+                        'UIDNo': 'UIDNO',
                         'VISAFILEREF': 'VISAFILEREF',
+                        'Visa File Number': 'VISAFILEREF',
+                        'ResidentFileNumber': 'VISAFILEREF',
                         'PASSPORTNO': 'PASSPORTNO',
+                        'Passport No': 'PASSPORTNO',
+                        'PassportNum': 'PASSPORTNO',
                         'COMPANYPHONENUMBER': 'COMPANYPHONENUMBER',
+                        'Mobile No': 'COMPANYPHONENUMBER',
+                        'MobileNumber': 'COMPANYPHONENUMBER',
                         'COMPANYEMAILID': 'COMPANYEMAILID',
+                        'Email': 'COMPANYEMAILID',
+                        'EmailId': 'COMPANYEMAILID',
                         'MOBILE': 'MOBILE',
-                        'EMAIL': 'EMAIL'
+                        'EMAIL': 'EMAIL',
+                        'EFFECTIVEDATE': 'EFFECTIVEDATE',
+                        'Effective Date': 'EFFECTIVEDATE',
+                        'EffectiveDate': 'EFFECTIVEDATE'
                     }
                 elif is_nas:
                     # NAS template field mapping  
                     excel_to_template_mapping = {
                         'First Name': 'First Name',
+                        'FIRSTNAME': 'First Name',
+                        'FirstName': 'First Name',
                         'Middle Name': 'Middle Name',
+                        'MIDDLENAME': 'Middle Name',
+                        'SecondName': 'Middle Name',
                         'Last Name': 'Last Name',
+                        'LASTNAME': 'Last Name',
+                        'LastName': 'Last Name',
                         'Staff ID': 'Staff ID',
+                        'EMPLOYEEID': 'Staff ID',
+                        'StaffNo': 'Staff ID',
                         'DOB': 'DOB',
                         'Gender': 'Gender',
+                        'GENDER': 'Gender',
                         'Nationality': 'Nationality',
+                        'NATIONALITY': 'Nationality',
+                        'Country': 'Nationality',
                         'Emirates Id': 'Emirates Id',
+                        'EMIRATESID': 'Emirates Id',
+                        'EIDNumber': 'Emirates Id',
                         'Unified No': 'Unified No',
+                        'UIDNO': 'Unified No',
+                        'UIDNo': 'Unified No',
                         'Visa File Number': 'Visa File Number',
+                        'VISAFILEREF': 'Visa File Number',
+                        'ResidentFileNumber': 'Visa File Number',
                         'Passport No': 'Passport No',
+                        'PASSPORTNO': 'Passport No',
+                        'PassportNum': 'Passport No',
                         'Mobile No': 'Mobile No',
+                        'MOBILE': 'Mobile No',
+                        'MobileNumber': 'Mobile No',
                         'Email': 'Email',
-                        'Contract Name': 'Contract Name'
+                        'EMAIL': 'Email',
+                        'EmailId': 'Email',
+                        'Contract Name': 'Contract Name',
+                        'Effective Date': 'Effective Date',
+                        'EFFECTIVEDATE': 'Effective Date',
+                        'EffectiveDate': 'Effective Date'
                     }
                 else:
                     # Generic mapping
@@ -891,11 +996,11 @@ class DataCombiner:
                         mapped_row[template_field] = preserved_excel_data[excel_field]
                         logger.info(f"  Restored {template_field}: '{preserved_excel_data[excel_field]}'")
                 
-                # Apply extracted document data if we have matches
+                # Apply extracted document data ONLY if we have matches for THIS ROW
                 if row_matches:
-                    logger.info(f"Applying extracted data from {len(row_matches)} matched documents:")
+                    logger.info(f"Applying extracted data from {len(row_matches)} matched documents to Row {row_idx+1}:")
                     
-                    # Get all extracted data from matched documents
+                    # Get all extracted data from matched documents for THIS ROW ONLY
                     combined_extracted = {}
                     for doc_key in row_matches:
                         if doc_key in documents_data:
@@ -905,8 +1010,21 @@ class DataCombiner:
                                     combined_extracted[field] = value
                     
                     # Apply extracted data to the correct template fields
-                    if is_almadallah:
-                        # Al Madallah field mappings
+                    if is_takaful:
+                        # Takaful field mappings for extracted data
+                        extracted_mappings = {
+                            'emirates_id': 'EIDNumber',
+                            'unified_no': 'UIDNo',
+                            'visa_file_number': 'ResidentFileNumber',
+                            'passport_number': 'PassportNum',
+                            'nationality': 'Country',
+                            'date_of_birth': 'DOB',
+                            'gender': 'Gender',
+                            'mobile_no': 'MobileNumber',
+                            'email': 'EmailId'
+                        }
+                    elif is_almadallah:
+                        # Al Madallah field mappings for extracted data
                         extracted_mappings = {
                             'emirates_id': 'EMIRATESID',
                             'unified_no': 'UIDNO',
@@ -919,7 +1037,7 @@ class DataCombiner:
                             'email': 'EMAIL'
                         }
                     elif is_nas:
-                        # NAS field mappings
+                        # NAS field mappings for extracted data
                         extracted_mappings = {
                             'emirates_id': 'Emirates Id',
                             'unified_no': 'Unified No',
@@ -938,7 +1056,7 @@ class DataCombiner:
                             if field in template_columns:
                                 extracted_mappings[field] = field
                     
-                    # Apply the extracted data
+                    # Apply the extracted data to THIS ROW ONLY
                     for extracted_field, template_field in extracted_mappings.items():
                         if (extracted_field in combined_extracted and 
                             template_field in template_columns):
@@ -948,7 +1066,7 @@ class DataCombiner:
                             # Only apply if the template field is currently empty
                             if not mapped_row.get(template_field) or mapped_row.get(template_field) == "":
                                 mapped_row[template_field] = value
-                                logger.info(f"  Applied extracted {template_field}: '{value}'")
+                                logger.info(f"  Applied extracted {template_field}: '{value}' to Row {row_idx+1}")
                 
                 # Generate FULLNAME if needed (Al Madallah template)
                 if (is_almadallah and 'FULLNAME' in template_columns and 
@@ -963,7 +1081,14 @@ class DataCombiner:
                         fullname = ' '.join([part for part in fullname_parts if part and part != ""]).strip()
                         if fullname:
                             mapped_row['FULLNAME'] = fullname
-                            logger.info(f"  Generated FULLNAME: '{fullname}'")
+                            logger.info(f"  Generated FULLNAME for Row {row_idx+1}: '{fullname}'")
+                
+                # Set template-specific defaults
+                if is_takaful:
+                    # Takaful-specific defaults
+                    if 'Relation' in template_columns and (not mapped_row.get('Relation') or mapped_row.get('Relation') == ""):
+                        mapped_row['Relation'] = 'Principal'
+                        logger.info(f"Set Takaful default Relation for Row {row_idx+1}: Principal")
                 
                 # Ensure standard fields are set
                 self._apply_standard_fields(mapped_row)
@@ -975,16 +1100,19 @@ class DataCombiner:
                     mapped_row['EFFECTIVEDATE'] = today_date
                 if 'Effective Date' in template_columns:
                     mapped_row['Effective Date'] = today_date
+                if 'EffectiveDate' in template_columns:
+                    mapped_row['EffectiveDate'] = today_date
                 logger.info(f"Set Effective Date to today: {today_date} for row {row_idx+1}")
                 
                 # Format Emirates ID if present
-                if 'EMIRATESID' in mapped_row and mapped_row['EMIRATESID'] != DEFAULT_VALUE and mapped_row['EMIRATESID']:
-                    mapped_row['EMIRATESID'] = self._format_emirates_id(mapped_row['EMIRATESID'])
-                if 'Emirates Id' in mapped_row and mapped_row['Emirates Id'] != DEFAULT_VALUE and mapped_row['Emirates Id']:
-                    mapped_row['Emirates Id'] = self._format_emirates_id(mapped_row['Emirates Id'])
+                emirate_id_fields = ['EMIRATESID', 'Emirates Id', 'EIDNumber']
+                for field in emirate_id_fields:
+                    if field in mapped_row and mapped_row[field] != DEFAULT_VALUE and mapped_row[field]:
+                        mapped_row[field] = self._format_emirates_id(mapped_row[field])
                 
                 # Add row to results
                 result_rows.append(mapped_row)
+                logger.info(f"✅ Successfully processed Row {row_idx+1}")
             else:
                 logger.error(f"mapped_row is None for row {row_idx+1}! Creating fallback row.")
                 
@@ -1002,8 +1130,11 @@ class DataCombiner:
                     fallback_row['EFFECTIVEDATE'] = today_date
                 if 'Effective Date' in fallback_row:
                     fallback_row['Effective Date'] = today_date
+                if 'EffectiveDate' in fallback_row:
+                    fallback_row['EffectiveDate'] = today_date
                 
                 result_rows.append(fallback_row)
+                logger.info(f"⚠️  Added fallback row for Row {row_idx+1}")
         
         # Create DataFrame from rows
         result_df = pd.DataFrame(result_rows)
@@ -1111,328 +1242,240 @@ class DataCombiner:
                                 result_df.at[idx, 'Unified No'] = unified_candidate
         
         # CRITICAL FIX: Apply document data directly to the Excel result DataFrame                
-        logger.info("Directly applying document data to result DataFrame")
+        logger.info("DIRECTLY APPLYING DOCUMENT DATA TO ALL ROWS")
         for doc_key, doc_info in documents_data.items():
-            doc_type = doc_info['type']
             doc_data = doc_info['data']
+            matched_rows = matches.get(doc_key, [])
             
-            # Find which row(s) this document was matched with
-            matched_rows = []
-            for row_idx, doc_keys in matches.items():
-                if doc_key in doc_keys:
-                    matched_rows.append(row_idx)
             
-            # Apply extracted document data to matched rows
+            # Apply to matched rows
             for row_idx in matched_rows:
-                logger.info(f"Directly applying critical data from {doc_key} to row {row_idx+1}")
-                
-                # Apply key fields directly to the final DataFrame
-                if 'passport_number' in doc_data and doc_data['passport_number'] != DEFAULT_VALUE:
-                    result_df.at[row_idx, 'Passport No'] = doc_data['passport_number']
-                    logger.info(f"DIRECT SET: Passport No for row {row_idx+1}: {doc_data['passport_number']}")
+                if row_idx < len(result_df):
+                    logger.info(f"Applying {doc_key} data to row {row_idx+1}")
                     
-                if 'emirates_id' in doc_data and doc_data['emirates_id'] != DEFAULT_VALUE:
-                    # Format and validate Emirates ID
-                    eid_value = self._process_emirates_id(doc_data['emirates_id'])
-                    result_df.at[row_idx, 'Emirates Id'] = eid_value
-                    logger.info(f"DIRECT SET: Emirates Id for row {row_idx+1}: {eid_value}")
+                    # CRITICAL FIELD APPLICATION
+                    critical_fields = {
+                        'passport_number': ['Passport No', 'PASSPORTNO', 'PassportNum'],
+                        'emirates_id': ['Emirates Id', 'EMIRATESID', 'EIDNumber'], 
+                        'unified_no': ['Unified No', 'UIDNO', 'UIDNo'],
+                        'visa_file_number': ['Visa File Number', 'VISAFILEREF', 'ResidentFileNumber'],
+                        'nationality': ['Nationality', 'NATIONALITY', 'Country'],
+                        'date_of_birth': ['DOB'],
+                        'gender': ['Gender', 'GENDER']
+                    }
                     
-                if 'unified_no' in doc_data and doc_data['unified_no'] != DEFAULT_VALUE:
-                    # Verify it's not just visa_file_number without slashes
-                    is_valid = True
-                    if 'visa_file_number' in doc_data and doc_data['visa_file_number'] != DEFAULT_VALUE:
-                        visa_no_slashes = doc_data['visa_file_number'].replace('/', '')
-                        if doc_data['unified_no'] == visa_no_slashes:
-                            is_valid = False
-                    
-                    if is_valid:
-                        result_df.at[row_idx, 'Unified No'] = doc_data['unified_no']
-                        logger.info(f"DIRECT SET: Unified No for row {row_idx+1}: {doc_data['unified_no']}")
-                    
-                if 'visa_file_number' in doc_data and doc_data['visa_file_number'] != DEFAULT_VALUE:
-                    result_df.at[row_idx, 'Visa File Number'] = doc_data['visa_file_number']
-                    logger.info(f"DIRECT SET: Visa File Number for row {row_idx+1}: {doc_data['visa_file_number']}")
-                    
-                # Apply other essential fields
-                field_mapping = {
-                    'nationality': 'Nationality',
-                    'date_of_birth': 'DOB',
-                    'gender': 'Gender',
-                    'passport_expiry_date': 'Passport Expiry Date',
-                    'visa_expiry_date': 'Visa Expiry Date',
-                    'profession': 'Occupation'
-                }
-                
-                for doc_field, result_field in field_mapping.items():
-                    if doc_field in doc_data and doc_data[doc_field] != DEFAULT_VALUE:
-                        result_df.at[row_idx, result_field] = doc_data[doc_field]
-                        logger.info(f"DIRECT SET: {result_field} for row {row_idx+1}: {doc_data[doc_field]}")
-        
-        # FINAL SAFETY CHECK: Make sure names are never lost from original Excel
-        logger.info("FINAL SAFETY CHECK: Ensuring names are preserved from original Excel")
-        for idx, row in excel_data.iterrows():
-            # Check if row exists in result_df (should always be true if index matches)
-            if idx < len(result_df):
-                # Check critical fields
-                for field in ['First Name', 'Middle Name', 'Last Name', 'Contract Name', 'DOB', 'Gender', 'Nationality', 'Emirates Id', 'Unified No', 'Passport No', 'Visa File Number']:
-                    if field in row and field in result_df.columns:
-                        excel_value = row[field]
-                        if pd.notna(excel_value) and excel_value != '' and excel_value != self.DEFAULT_VALUE:
-                            if result_df.at[idx, field] != excel_value:
-                                logger.info(f"Row {idx+1}: Forcing preservation of Excel {field}: {excel_value}")
-                                result_df.at[idx, field] = excel_value
-        
+                    for doc_field, result_fields in critical_fields.items():
+                        if doc_field in doc_data and doc_data[doc_field] != self.DEFAULT_VALUE:
+                            value = doc_data[doc_field]
+                            
+                            # Apply to all matching result fields
+                            for result_field in result_fields:
+                                if result_field in result_df.columns:
+                                    result_df.at[row_idx, result_field] = value
+                                    logger.info(f"APPLIED {result_field} = {value} to row {row_idx+1}")
+
         return result_df
 
 
     def _match_documents_to_rows(self, documents_data: Dict, excel_rows_info: List[Dict]) -> Dict[int, List[str]]:
-        """Match documents to Excel rows - works for both NAS and Al Madallah templates."""
+        """FIXED document matching - works for ALL template types."""
         row_matches = {}
-        match_details = {}
         
-        # Initialize row matches
+        # Initialize matches
         for row_idx, _ in enumerate(excel_rows_info):
             row_matches[row_idx] = []
-            match_details[row_idx] = []
         
-        # If no data to match, return empty matches
         if not documents_data or not excel_rows_info:
-            logger.warning("No documents or Excel rows to match")
             return row_matches
-        
-        # Extract names from Excel rows - UNIVERSAL approach for both templates
+
+        # UNIVERSAL name extraction - works for NAS, Al Madallah, AND Takaful
         excel_names = []
         for row_idx, row_info in enumerate(excel_rows_info):
             row_data = row_info.get('data', {})
             
-            # Try BOTH template field name formats
-            # Al Madallah format: FIRSTNAME, MIDDLENAME, LASTNAME, FULLNAME
-            # NAS format: First Name, Middle Name, Last Name, full_name
-            
+            # Extract names using ALL possible field name variations
             first_name = ""
-            middle_name = ""
             last_name = ""
             full_name = ""
             
-            # Check Al Madallah format first
-            if 'FIRSTNAME' in row_data:
-                first_name = str(row_data.get('FIRSTNAME', '')).strip()
-            elif 'First Name' in row_data:
-                first_name = str(row_data.get('First Name', '')).strip()
-            elif 'first_name' in row_data:
-                first_name = str(row_data.get('first_name', '')).strip()
-                
-            if 'MIDDLENAME' in row_data:
-                middle_name = str(row_data.get('MIDDLENAME', '')).strip()
-            elif 'Middle Name' in row_data:
-                middle_name = str(row_data.get('Middle Name', '')).strip()
-            elif 'middle_name' in row_data:
-                middle_name = str(row_data.get('middle_name', '')).strip()
-                
-            if 'LASTNAME' in row_data:
-                last_name = str(row_data.get('LASTNAME', '')).strip()
-            elif 'Last Name' in row_data:
-                last_name = str(row_data.get('Last Name', '')).strip()
-            elif 'last_name' in row_data:
-                last_name = str(row_data.get('last_name', '')).strip()
-                
-            if 'FULLNAME' in row_data:
-                full_name = str(row_data.get('FULLNAME', '')).strip()
-            elif 'Full Name' in row_data:
-                full_name = str(row_data.get('Full Name', '')).strip()
-            elif 'full_name' in row_data:
-                full_name = str(row_data.get('full_name', '')).strip()
+            # ALL possible first name field variations
+            first_name_fields = [
+                'First Name', 'FIRSTNAME', 'FirstName', 'first_name', 
+                'given_names', 'Given Name', 'GivenName'
+            ]
             
-            # Create name variants for matching
-            name_variants = []
+            # ALL possible last name field variations  
+            last_name_fields = [
+                'Last Name', 'LASTNAME', 'LastName', 'last_name',
+                'surname', 'Surname', 'FamilyName', 'family_name'
+            ]
+            
+            # ALL possible full name field variations
+            full_name_fields = [
+                'Full Name', 'FULLNAME', 'FullName', 'full_name',
+                'Name', 'name', 'Complete Name'
+            ]
+            
+            # Extract first name
+            for field in first_name_fields:
+                if field in row_data and row_data[field] and str(row_data[field]).strip():
+                    first_name = str(row_data[field]).strip().upper()
+                    break
+                    
+            # Extract last name
+            for field in last_name_fields:
+                if field in row_data and row_data[field] and str(row_data[field]).strip():
+                    last_name = str(row_data[field]).strip().upper()
+                    break
+                    
+            # Extract full name
+            for field in full_name_fields:
+                if field in row_data and row_data[field] and str(row_data[field]).strip():
+                    full_name = str(row_data[field]).strip().upper()
+                    break
+            
+            # Create comprehensive name variants for matching
+            name_variants = set()
+            
             if full_name:
-                name_variants.append(full_name.upper())
+                name_variants.add(full_name)
+                # Split full name into individual words
+                name_variants.update(full_name.split())
+            
             if first_name:
-                name_variants.append(first_name.upper())
+                name_variants.add(first_name)
+                
             if last_name:
-                name_variants.append(last_name.upper())
+                name_variants.add(last_name)
+                
             if first_name and last_name:
-                name_variants.append(f"{first_name} {last_name}".upper())
-            if first_name and middle_name and last_name:
-                name_variants.append(f"{first_name} {middle_name} {last_name}".upper())
+                name_variants.add(f"{first_name} {last_name}")
+            
+            # Handle cases where first name might contain full name
+            if first_name and len(first_name.split()) > 1:
+                parts = first_name.split()
+                name_variants.update(parts)
+                if not last_name and len(parts) >= 2:
+                    last_name = parts[-1]  # Use last word as last name
+                    name_variants.add(last_name)
             
             excel_names.append({
                 'row_idx': row_idx,
-                'variants': name_variants,
-                'first': first_name.upper(),
-                'last': last_name.upper(),
-                'full': full_name.upper()
+                'variants': list(name_variants),
+                'first': first_name,
+                'last': last_name,
+                'full': full_name
             })
             
-            logger.info(f"Excel Row {row_idx+1} name variants: {name_variants}")
-        
-        # Match each document to Excel rows
+            logger.info(f"Excel Row {row_idx+1} names extracted: First='{first_name}', Last='{last_name}', Variants={name_variants}")
+
+        # IMPROVED MATCHING ALGORITHM
         for doc_key, doc_info in documents_data.items():
-            doc_type = doc_info['type']
             doc_data = doc_info['data']
-            file_name = doc_info['file_name'].upper()
-            
-            # Skip matching if doc_data is None or empty
             if not doc_data:
                 continue
                 
-            # Extract key identifiers from document
-            doc_identifiers = {}
-            
-            # Extract passport number
-            for field in ['passport_number', 'passport_no']:
-                if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
-                    doc_identifiers['passport'] = re.sub(r'\s+', '', str(doc_data[field])).upper()
-                    logger.info(f"Document {doc_key} has passport: {doc_identifiers['passport']}")
-                    break
-                    
-            # Extract Emirates ID
-            for field in ['emirates_id', 'emirates_id_number']:
-                if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
-                    doc_identifiers['emirates_id'] = re.sub(r'[^0-9]', '', str(doc_data[field]))
-                    logger.info(f"Document {doc_key} has Emirates ID: {doc_identifiers['emirates_id']}")
-                    break
-                    
-            # Extract unified number
-            for field in ['unified_no', 'unified_number']:
-                if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
-                    doc_identifiers['unified_no'] = str(doc_data[field])
-                    logger.info(f"Document {doc_key} has unified number: {doc_identifiers['unified_no']}")
-                    break
-                    
-            # Extract name
-            for field in ['full_name', 'name', 'name_en']:
-                if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
-                    doc_identifiers['name'] = doc_data[field].lower()
-                    logger.info(f"Document {doc_key} has name: {doc_identifiers['name']}")
-                    break
-            
-            # Try to match with each Excel row
             best_match_idx = None
             best_match_score = 0
             best_match_reasons = []
             
             for excel_name_info in excel_names:
                 row_idx = excel_name_info['row_idx']
-                match_score = 0
+                score = 0
                 match_reasons = []
                 
-                # Get row identifiers for matching
-                row_data = excel_rows_info[row_idx]['data']
-                row_identifiers = {}
-                
-                # Extract row passport (check both formats)
-                for field in ['passport_no', 'Passport No', 'PassportNo', 'PASSPORTNO']:
-                    if field in row_data and row_data[field] and str(row_data[field]).strip() != '':
-                        row_identifiers['passport'] = re.sub(r'\s+', '', str(row_data[field])).upper()
+                # Extract document name
+                doc_name = ""
+                for field in ['full_name', 'name', 'name_en', 'given_names', 'surname']:
+                    if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
+                        if field in ['given_names', 'surname']:
+                            # For passport fields, combine them
+                            given = doc_data.get('given_names', '')
+                            surname = doc_data.get('surname', '')
+                            if given and surname:
+                                doc_name = f"{given} {surname}".upper()
+                            elif given:
+                                doc_name = given.upper()
+                            elif surname:
+                                doc_name = surname.upper()
+                        else:
+                            doc_name = str(doc_data[field]).upper()
                         break
+                
+                # NAME MATCHING (Up to 100 points)
+                if doc_name and excel_name_info['variants']:
+                    doc_words = set(re.findall(r'\b\w+\b', doc_name))
+                    excel_words = set()
+                    for variant in excel_name_info['variants']:
+                        excel_words.update(re.findall(r'\b\w+\b', variant))
+                    
+                    # Calculate matching words
+                    common_words = doc_words.intersection(excel_words)
+                    if common_words:
+                        # Higher score for more matching words
+                        name_score = min(80, len(common_words) * 25)
+                        score += name_score
+                        match_reasons.append(f"Name words match: {common_words} (score: {name_score})")
+                    
+                    # Extra points for exact first/last name matches
+                    if excel_name_info['first'] and excel_name_info['first'] in doc_name:
+                        score += 10
+                        match_reasons.append("First name exact match")
                         
-                # Extract row Emirates ID (check both formats)
-                for field in ['emirates_id', 'Emirates Id', 'EID', 'EMIRATESID']:
-                    if field in row_data and row_data[field] and str(row_data[field]).strip() != '':
-                        row_identifiers['emirates_id'] = re.sub(r'[^0-9]', '', str(row_data[field]))
+                    if excel_name_info['last'] and excel_name_info['last'] in doc_name:
+                        score += 10
+                        match_reasons.append("Last name exact match")
+                
+                # PASSPORT MATCHING (100 points - decisive)
+                doc_passport = None
+                for field in ['passport_number', 'passport_no']:
+                    if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
+                        doc_passport = re.sub(r'\s+', '', str(doc_data[field])).upper()
                         break
                 
-                # Passport match (worth 100 points)
-                if 'passport' in doc_identifiers and 'passport' in row_identifiers:
-                    doc_passport = doc_identifiers['passport']
-                    row_passport = row_identifiers['passport']
-                    
-                    if doc_passport == row_passport:
-                        match_score += 100
-                        match_reasons.append(f"Passport exact match: {doc_passport}")
-                    elif doc_passport and row_passport and (doc_passport in row_passport or row_passport in doc_passport):
-                        match_score += 50
-                        match_reasons.append(f"Passport partial match: {doc_passport} vs {row_passport}")
-                        
-                # Emirates ID match (worth 100 points)
-                if 'emirates_id' in doc_identifiers and 'emirates_id' in row_identifiers:
-                    doc_eid = doc_identifiers['emirates_id']
-                    row_eid = row_identifiers['emirates_id']
-                    
-                    if doc_eid == row_eid:
-                        match_score += 100
-                        match_reasons.append(f"Emirates ID exact match: {doc_eid}")
-                    elif doc_eid and row_eid and len(doc_eid) >= 8 and len(row_eid) >= 8:
-                        # Try last 8 digits matching
-                        if doc_eid[-8:] == row_eid[-8:]:
-                            match_score += 80
-                            match_reasons.append(f"Emirates ID last 8 digits match")
+                if doc_passport:
+                    row_data = excel_rows_info[row_idx]['data']
+                    passport_fields = ['Passport No', 'passport_no', 'PASSPORTNO', 'PassportNum', 'passport_number']
+                    for field in passport_fields:
+                        if field in row_data and row_data[field]:
+                            row_passport = re.sub(r'\s+', '', str(row_data[field])).upper()
+                            if doc_passport == row_passport:
+                                score += 100
+                                match_reasons.append(f"Passport exact match: {doc_passport}")
+                                break
                 
-                # Name matching (worth up to 50 points)
-                if 'name' in doc_identifiers:
-                    doc_name = doc_identifiers['name']
-                    excel_variants = excel_name_info['variants']
-                    
-                    for excel_variant in excel_variants:
-                        if excel_variant:
-                            # Calculate name similarity
-                            doc_words = set(re.findall(r'\b\w+\b', doc_name))
-                            excel_words = set(re.findall(r'\b\w+\b', excel_variant.lower()))
-                            
-                            if doc_words and excel_words:
-                                common_words = doc_words.intersection(excel_words)
-                                
-                                if common_words:
-                                    similarity = len(common_words) / max(len(doc_words), len(excel_words))
-                                    name_score = int(similarity * 50)
-                                    match_score += name_score
-                                    match_reasons.append(f"Name similarity: {similarity:.2f} ({doc_name} ≈ {excel_variant})")
+                # EMIRATES ID MATCHING (100 points - decisive)  
+                doc_eid = None
+                for field in ['emirates_id', 'eid']:
+                    if field in doc_data and doc_data[field] != self.DEFAULT_VALUE:
+                        doc_eid = re.sub(r'[^0-9]', '', str(doc_data[field]))
+                        break
                 
-                # Update best match if better score
-                if match_score > best_match_score:
-                    best_match_score = match_score
+                if doc_eid:
+                    row_data = excel_rows_info[row_idx]['data']
+                    eid_fields = ['Emirates Id', 'emirates_id', 'EMIRATESID', 'EIDNumber', 'eid']
+                    for field in eid_fields:
+                        if field in row_data and row_data[field]:
+                            row_eid = re.sub(r'[^0-9]', '', str(row_data[field]))
+                            if doc_eid == row_eid:
+                                score += 100
+                                match_reasons.append(f"Emirates ID exact match: {doc_eid}")
+                                break
+                
+                # Update best match
+                if score > best_match_score:
+                    best_match_score = score
                     best_match_idx = row_idx
                     best_match_reasons = match_reasons
             
-            # Assign document to best match if score is high enough
-            if best_match_idx is not None and best_match_score >= 50:
+            # Assign match if score is sufficient (lowered threshold)
+            if best_match_idx is not None and best_match_score >= 25:
                 row_matches[best_match_idx].append(doc_key)
-                match_details[best_match_idx].append({
-                    'doc_key': doc_key,
-                    'score': best_match_score,
-                    'reasons': best_match_reasons
-                })
-                logger.info(f"Matched {doc_key} to row {best_match_idx+1} with score {best_match_score}")
+                logger.info(f"✅ MATCHED {doc_key} to Row {best_match_idx+1} (score: {best_match_score})")
                 for reason in best_match_reasons:
-                    logger.info(f"  - {reason}")
+                    logger.info(f"   - {reason}")
             else:
-                # If no match based on identifiers, try filename matching as last resort
-                logger.warning(f"No identifier match found for {doc_key}, trying filename matching")
-                best_match_idx = None
-                best_match_score = 0
-                filename = doc_info['file_name'].lower()
-                
-                for excel_name_info in excel_names:
-                    row_idx = excel_name_info['row_idx']
-                    excel_variants = excel_name_info['variants']
-                    
-                    # Score based on name parts in filename
-                    score = 0
-                    matched_parts = []
-                    
-                    for variant in excel_variants:
-                        if variant:
-                            name_parts = set(re.findall(r'\b\w+\b', variant.lower()))
-                            for part in name_parts:
-                                if len(part) >= 3 and part in filename:
-                                    score += 10  # 10 points per name part match
-                                    matched_parts.append(part)
-                    
-                    if score > best_match_score:
-                        best_match_score = score
-                        best_match_idx = row_idx
-                
-                if best_match_idx is not None and best_match_score >= 10:
-                    row_matches[best_match_idx].append(doc_key)
-                    logger.info(f"Last-resort filename match for {doc_key} to row {best_match_idx+1} (score: {best_match_score})")
-        
-        # Save match details for debugging
-        try:
-            with open('document_match_details.json', 'w') as f:
-                json.dump(match_details, f, indent=2, default=str)
-        except:
-            pass
+                logger.warning(f"❌ NO MATCH for {doc_key} (best score: {best_match_score})")
         
         return row_matches
 
@@ -2552,77 +2595,196 @@ class DataCombiner:
         for col in template_columns:
             mapped[col] = ""
         
-         # Detect template type based on columns
-        is_almadallah = any(col in template_columns for col in ['POLICYCATEGORY', 'ENTITYID', 'POLICYSEQUENCE', 'FIRSTNAME', 'MIDDLENAME', 'LASTNAME'])
-        is_takaful = any(col in template_columns for col in ['StaffNo', 'PrincipalName', 'FirstName', 'SecondName', 'LastName', 'EIDNumber', 'ResidentFileNumber'])
+        # IMPROVED TEMPLATE DETECTION - More reliable and specific
+        is_almadallah = any(col in template_columns for col in ['FIRSTNAME', 'MIDDLENAME', 'LASTNAME', 'FULLNAME', 'EMPLOYEEID', 'EMIRATESID', 'UIDNO', 'VISAFILEREF', 'POLICYCATEGORY', 'ESTABLISHMENTTYPE'])
+        is_takaful = any(col in template_columns for col in ['StaffNo', 'FirstName', 'SecondName', 'LastName', 'EIDNumber', 'ResidentFileNumber', 'UIDNo', 'PassportNum'])
+        is_nas = any(col in template_columns for col in ['First Name', 'Middle Name', 'Last Name', 'Staff ID', 'Emirates Id', 'Unified No', 'Passport No']) and not is_almadallah and not is_takaful
         
-        # Direct copy of critical fields - these should override any other mapping
-        critical_fields = {
-            'unified_no': 'Unified No',
-            'visa_file_number': 'Visa File Number',
-            'emirates_id': 'Emirates Id',
-            'passport_number': 'Passport No',
-            'Unified No': 'Unified No',
-            'Visa File Number': 'Visa File Number',
-            'Emirates Id': 'Emirates Id',
-            'Passport No': 'Passport No'
+        logger.info(f"IMPROVED TEMPLATE DETECTION: NAS={is_nas}, Al Madallah={is_almadallah}, Takaful={is_takaful}")
+        logger.info(f"Template columns sample: {template_columns[:10]}")
+
+        # CRITICAL: Copy all existing Excel data first to preserve it (HIGHEST PRIORITY)
+        for key, value in data.items():
+            if key in template_columns and value != self.DEFAULT_VALUE and value != "":
+                mapped[key] = value
+                logger.info(f"PRESERVED Excel field: {key} = {value}")
+
+        # CRITICAL: Apply extracted data to correct fields with absolute priority
+        critical_mappings = {
+            'unified_no': ['Unified No', 'UIDNO', 'UIDNo'],
+            'visa_file_number': ['Visa File Number', 'VISAFILEREF', 'ResidentFileNumber'],  
+            'emirates_id': ['Emirates Id', 'EMIRATESID', 'EIDNumber'],
+            'passport_number': ['Passport No', 'PASSPORTNO', 'PassportNum'],
+            'passport_no': ['Passport No', 'PASSPORTNO', 'PassportNum'],
+            'nationality': ['Nationality', 'NATIONALITY', 'Country'],
+            'date_of_birth': ['DOB', 'DOB', 'DOB'],
+            'dob': ['DOB', 'DOB', 'DOB'],
+            'gender': ['Gender', 'GENDER', 'Gender'],
+            'mobile_no': ['Mobile No', 'MOBILE', 'COMPANYPHONENUMBER', 'MobileNumber'],
+            'email': ['Email', 'EMAIL', 'COMPANYEMAILID', 'EmailId']
         }
         
-        # Direct mapping of critical fields
-        for source, target in critical_fields.items():
-            if source in data and data[source] != self.DEFAULT_VALUE and data[source] != "":
-                if target in template_columns:
-                    mapped[target] = data[source]
-                    logger.info(f"TEMPLATE MAP: {source} → {target}: {data[source]}")
-        
-        
-        # Add Takaful-specific critical field mappings
+        # Apply critical mappings with absolute priority  
+        for extract_field, target_fields in critical_mappings.items():
+            if extract_field in data and data[extract_field] != self.DEFAULT_VALUE and data[extract_field] != "":
+                for target_field in target_fields:
+                    if target_field in template_columns:
+                        mapped[target_field] = data[extract_field]
+                        logger.info(f"CRITICAL MAPPING APPLIED: {extract_field} → {target_field}: {data[extract_field]}")
+
+        # TEMPLATE-SPECIFIC PROCESSING
         if is_takaful:
-            takaful_critical_fields = {
-                'emirates_id': 'EIDNumber',
-                'Emirates Id': 'EIDNumber',
-                'passport_number': 'PassportNum',
-                'passport_no': 'PassportNum',
-                'Passport No': 'PassportNum',
-                'unified_no': 'UIDNo',
-                'Unified No': 'UIDNo',
-                'visa_file_number': 'ResidentFileNumber',
-                'Visa File Number': 'ResidentFileNumber',
-                'nationality': 'Country',
-                'Nationality': 'Country',
-                'date_of_birth': 'DOB',
-                'dob': 'DOB',
-                'DOB': 'DOB',
-                'gender': 'Gender',
-                'Gender': 'Gender'
+            logger.info("=" * 80)
+            logger.info("TAKAFUL TEMPLATE DETECTED AND PROCESSING")
+            logger.info("=" * 80)
+            logger.info(f"Template has {len(template_columns)} columns")
+            
+            # COMPLETE Takaful specific mappings - THIS WAS THE MAIN ISSUE
+            takaful_mappings = {
+                # NAME FIELDS - CRITICAL
+                'first_name': ['FirstName'],
+                'First Name': ['FirstName'],
+                'middle_name': ['SecondName'], 
+                'Middle Name': ['SecondName'],
+                'last_name': ['LastName'],
+                'Last Name': ['LastName'],
+                
+                # ID FIELDS - CRITICAL  
+                'staff_id': ['StaffNo'],
+                'Staff ID': ['StaffNo'],
+                'emirates_id': ['EIDNumber'],
+                'Emirates Id': ['EIDNumber'],
+                'unified_no': ['UIDNo'],
+                'Unified No': ['UIDNo'],
+                'passport_number': ['PassportNum'],
+                'passport_no': ['PassportNum'],
+                'Passport No': ['PassportNum'],
+                'visa_file_number': ['ResidentFileNumber'],
+                'Visa File Number': ['ResidentFileNumber'],
+                
+                # PERSONAL INFO - CRITICAL
+                'nationality': ['Country'],
+                'Nationality': ['Country'],
+                'date_of_birth': ['DOB'],
+                'dob': ['DOB'],
+                'DOB': ['DOB'],
+                'gender': ['Gender'],
+                'Gender': ['Gender'],
+                
+                # CONTACT INFO
+                'mobile_no': ['MobileNumber'],
+                'Mobile No': ['MobileNumber'],
+                'email': ['EmailId'],
+                'Email': ['EmailId'],
+                
+                # OTHER FIELDS
+                'effective_date': ['EffectiveDate'],
+                'Effective Date': ['EffectiveDate'],
+                'marital_status': ['MaritalStatus'],
+                'Marital Status': ['MaritalStatus'],
+                'contract_name': ['SubGroupDivision'],
+                'Contract Name': ['SubGroupDivision']
             }
             
-            # Apply Takaful critical mappings
-            for source, target in takaful_critical_fields.items():
-                if source in data and data[source] != self.DEFAULT_VALUE and data[source] != "":
-                    if target in template_columns:
-                        mapped[target] = data[source]
-                        logger.info(f"TAKAFUL CRITICAL MAP: {source} → {target}: {data[source]}")
-        
-        # Copy all existing Excel data first to preserve it
-        for key, value in data.items():
-            if key in template_columns:
-                mapped[key] = value
-                if key == 'Contract Name':
-                    logger.info(f"Preserving Contract Name: {value}")
-        
-        # Detect template type based on columns - check for Al Madallah specific fields
-        is_almadallah = any(col in template_columns for col in ['POLICYCATEGORY', 'ENTITYID', 'POLICYSEQUENCE', 'FIRSTNAME', 'MIDDLENAME', 'LASTNAME'])
-        is_takaful = any(col in template_columns for col in ['StaffNo', 'PrincipalName', 'FirstName', 'SecondName', 'LastName', 'EIDNumber', 'ResidentFileNumber'])
-        
-        if is_almadallah:
+            # Apply Takaful mappings with detailed logging
+            for source_field, target_fields in takaful_mappings.items():
+                if source_field in data and data[source_field] != self.DEFAULT_VALUE and data[source_field] != "":
+                    for target_field in target_fields:
+                        if target_field in template_columns:
+                            mapped[target_field] = data[source_field]
+                            logger.info(f"TAKAFUL MAPPING APPLIED: {source_field} → {target_field}: {data[source_field]}")
+
+            # ALSO check for direct template column names in data (CRITICAL FIX)
+            for col in template_columns:
+                if col in data and data[col] != self.DEFAULT_VALUE and data[col] != "":
+                    mapped[col] = data[col]
+                    logger.info(f"TAKAFUL DIRECT MAPPING: {col} = {data[col]}")
+            
+            # Set Takaful-specific defaults
+            takaful_defaults = {
+                'Relation': 'Principal',
+                'IsCommissionBasedSalary': 'No', 
+                'EntityType': 'Establishment',
+                'EntityId': '230376/6',
+                'PolicySequence': '1'
+            }
+            
+            for field, default_value in takaful_defaults.items():
+                if field in template_columns and (field not in mapped or mapped[field] == ""):
+                    mapped[field] = default_value
+                    logger.info(f"Set Takaful default {field}: {default_value}")
+
+            # Relation - default to 'Principal' if empty
+            if 'Relation' in template_columns and (not mapped.get('Relation') or mapped.get('Relation') == ''):
+                mapped['Relation'] = 'Principal'
+                logger.info("Set default Relation: Principal")
+            
+            # Salary processing
+            if 'Salary' in template_columns and 'Salary' in mapped:
+                salary_value = mapped['Salary']
+                # If it's a number, convert to text description
+                try:
+                    salary_num = float(str(salary_value).replace(',', '').replace('AED', '').strip())
+                    if salary_num < 4000:
+                        mapped['Salary'] = 'less than 4000 AED/month'
+                    elif salary_num <= 12000:
+                        mapped['Salary'] = 'between 4001 AED and 12000 AED/month'
+                    else:
+                        mapped['Salary'] = 'more than 12000 AED/month'
+                except:
+                    # If not a number, keep as is
+                    pass
+            
+            # SalaryBand - depends on Salary
+            if 'SalaryBand' in template_columns and 'Salary' in mapped:
+                salary_text = mapped['Salary'].lower()
+                if 'less than 4000' in salary_text:
+                    mapped['SalaryBand'] = 'LSB'
+                else:
+                    mapped['SalaryBand'] = 'NLSB'
+                logger.info(f"Set SalaryBand based on Salary: {mapped['SalaryBand']}")
+            
+            # MemberType - based on ResidentFileNumber
+            if 'MemberType' in template_columns and 'ResidentFileNumber' in mapped:
+                resident_file = mapped['ResidentFileNumber']
+                if resident_file and resident_file.startswith('20'):
+                    mapped['MemberType'] = 'Expat who is residency is issued in Dubai'
+                else:
+                    mapped['MemberType'] = 'Expat who is residency is issued in Emirates other than Dubai'
+                logger.info(f"Set MemberType based on ResidentFileNumber: {mapped['MemberType']}")
+            
+            # Set emirate values based on visa file number
+            if 'ResidentFileNumber' in mapped and mapped['ResidentFileNumber'] != self.DEFAULT_VALUE:
+                visa_file = mapped['ResidentFileNumber']
+                digits = ''.join(filter(str.isdigit, str(visa_file)))
+                
+                if digits.startswith('20'):  # Dubai
+                    if 'Emirate' in template_columns:
+                        mapped['Emirate'] = 'Dubai'
+                    if 'City' in template_columns:
+                        mapped['City'] = 'Dubai'
+                    if 'ResidentialLocation' in template_columns:
+                        mapped['ResidentialLocation'] = 'DUBAI (DISTRICT UNKNOWN)'
+                    if 'WorkLocation' in template_columns:
+                        mapped['WorkLocation'] = 'DUBAI (DISTRICT UNKNOWN)'
+                elif digits.startswith('10'):  # Abu Dhabi
+                    if 'Emirate' in template_columns:
+                        mapped['Emirate'] = 'Abu Dhabi'
+                    if 'City' in template_columns:
+                        mapped['City'] = 'Abu Dhabi'
+                    if 'ResidentialLocation' in template_columns:
+                        mapped['ResidentialLocation'] = 'Al Ain City'
+                    if 'WorkLocation' in template_columns:
+                        mapped['WorkLocation'] = 'Al Ain City'
+
+        elif is_almadallah:
             logger.info("=" * 80)
             logger.info("AL MADALLAH TEMPLATE DETECTED")
             logger.info("=" * 80)
             logger.info(f"Template has {len(template_columns)} columns")
             logger.info(f"First 10 template columns: {template_columns[:10]}")
             
-            # Al Madallah specific mappings
+            # Al Madallah specific mappings (KEEP EXISTING LOGIC)
             almadallah_mappings = {
                 'FIRSTNAME': ['first_name', 'First Name', 'given_names'],
                 'MIDDLENAME': ['middle_name', 'Middle Name'],
@@ -2778,154 +2940,9 @@ class DataCombiner:
                     if field in template_columns:
                         mapped[field] = value
                         logger.info(f"Set default Al Madallah {field}: {value}")
-                        
-        elif is_takaful:
-            logger.info("=" * 80)
-            logger.info("TAKAFUL TEMPLATE DETECTED")
-            logger.info("=" * 80)
-            logger.info(f"Template has {len(template_columns)} columns")
-            
-            # Takaful specific mappings
-            takaful_mappings = {
-                'StaffNo': ['staff_id', 'Staff ID', 'employee_id'],
-                'PrincipalName': ['principal_name', 'Principal Name'],
-                'PrincipalCardNo': ['principal_card_no', 'Principal Card No.'],
-                'CardNo': ['card_no', 'Card No'],
-                'PhotoName': ['photo_name', 'Photo Name'],
-                'FirstName': ['first_name', 'First Name', 'given_names'],
-                'SecondName': ['middle_name', 'Middle Name'],
-                'LastName': ['last_name', 'Last Name', 'surname'],
-                'DOB': ['date_of_birth', 'dob', 'birth_date', 'DOB'],
-                'Gender': ['gender', 'sex', 'Gender'],
-                'Relation': ['relation', 'Relation'],
-                'Country': ['nationality', 'Nationality', 'citizenship'],
-                'MaritalStatus': ['marital_status', 'Marital Status'],
-                'Category': ['category', 'Category'],
-                'SubGroupDivision': ['subgroup_division', 'SubGroup Division', 'contract_name', 'Contract Name'],
-                'EffectiveDate': ['effective_date', 'Effective Date', 'start_date'],
-                'Emirate': ['visa_issuance_emirate', 'Visa Issuance Emirate'],
-                'EIDNumber': ['emirates_id', 'Emirates Id', 'eid'],
-                'Salary': ['salary', 'Salary', 'salary_band', 'Salary Band'],
-                'MobileNumber': ['mobile_no', 'Mobile No', 'phone'],
-                'EmailId': ['email', 'Email', 'email_address'],
-                'City': ['residence_emirate', 'Residence Emirate'],
-                'ResidentialLocation': ['residence_region', 'Residence Region'],
-                'WorkLocation': ['work_region', 'Work Region'],
-                'PassportNum': ['passport_number', 'passport_no', 'Passport No'],
-                'UIDNo': ['unified_no', 'Unified No', 'unified_number'],
-                'ResidentFileNumber': ['visa_file_number', 'Visa File Number', 'entry_permit_no'],
-                'Policy_Id': ['policy_id', 'Policy_Id'],
-                'EndorsementId': ['endorsement_id', 'EndorsementId'],
-                'DHPOMemberId': ['dhpo_member_id', 'DHPOMemberId'],
-                'BirthCertificateID': ['birth_certificate_id', 'BirthCertificateID'],
-                'EstablishmentEmail': ['company_mail', 'Company Mail', 'email'],
-                'RelationTo': ['relation_to', 'RelationTo'],
-                'EntityContactNumber': ['company_phone', 'Company Phone', 'mobile_no'],
-                'PolicySequence': ['policy_sequence', 'PolicySequence'],
-                'DHPOAgent_Id': ['dhpo_agent_id', 'DHPOAgent_Id'],
-                'DHPOErrorMessage': ['dhpo_error_message', 'DHPOErrorMessage'],
-                'COCRef': ['coc_ref', 'COCRef'],
-                'Penalty': ['penalty', 'Penalty'],
-                'COCError': ['coc_error', 'COCError'],
-                'COCCValiditydate': ['cocc_validity_date', 'COCCValiditydate'],
-                'COCNonInsuranceDays': ['coc_non_insurance_days', 'COCNonInsuranceDays'],
-                'COCStatus': ['coc_status', 'COCStatus'],
-                'PenaltyCalcType': ['penalty_calc_type', 'PenaltyCalcType']
-            }
-            
-            # Apply mappings for Takaful
-            for col in template_columns:
-                if col in takaful_mappings:
-                    for field_name in takaful_mappings[col]:
-                        if field_name in data and data[field_name] != self.DEFAULT_VALUE:
-                            mapped[col] = data[field_name]
-                            field_mappings[col] = field_name
-                            logger.info(f"Takaful mapping: {field_name} → {col}: {data[field_name]}")
-                            break
-            
-            # CRITICAL: Also check for direct template column names in data
-            # This ensures data from Excel and extracted documents both work
-            if col in data and data[col] != self.DEFAULT_VALUE:
-                mapped[col] = data[col]
-                field_mappings[col] = col
-            
-            # Relation - default to 'Principal' if empty
-            if 'Relation' in template_columns and (not mapped.get('Relation') or mapped.get('Relation') == ''):
-                mapped['Relation'] = 'Principal'
-                logger.info("Set default Relation: Principal")
-            
-            # Salary processing
-            if 'Salary' in template_columns and 'Salary' in mapped:
-                salary_value = mapped['Salary']
-                # If it's a number, convert to text description
-                try:
-                    salary_num = float(str(salary_value).replace(',', '').replace('AED', '').strip())
-                    if salary_num < 4000:
-                        mapped['Salary'] = 'less than 4000 AED/month'
-                    elif salary_num <= 12000:
-                        mapped['Salary'] = 'between 4001 AED and 12000 AED/month'
-                    else:
-                        mapped['Salary'] = 'more than 12000 AED/month'
-                except:
-                    # If not a number, keep as is
-                    pass
-            
-            # SalaryBand - depends on Salary
-            if 'SalaryBand' in template_columns and 'Salary' in mapped:
-                salary_text = mapped['Salary'].lower()
-                if 'less than 4000' in salary_text:
-                    mapped['SalaryBand'] = 'LSB'
-                else:
-                    mapped['SalaryBand'] = 'NLSB'
-                logger.info(f"Set SalaryBand based on Salary: {mapped['SalaryBand']}")
-            
-            # IsCommissionBasedSalary - always 'No'
-            if 'IsCommissionBasedSalary' in template_columns:
-                mapped['IsCommissionBasedSalary'] = 'No'
-            
-            # EntityType - always 'Establishment'
-            if 'EntityType' in template_columns:
-                mapped['EntityType'] = 'Establishment'
-            
-            # EntityId - always '230376/6'
-            if 'EntityId' in template_columns:
-                mapped['EntityId'] = '230376/6'
-            
-            # MemberType - based on ResidentFileNumber
-            if 'MemberType' in template_columns and 'ResidentFileNumber' in mapped:
-                resident_file = mapped['ResidentFileNumber']
-                if resident_file and resident_file.startswith('20'):
-                    mapped['MemberType'] = 'Expat who is residency is issued in Dubai'
-                else:
-                    mapped['MemberType'] = 'Expat who is residency is issued in Emirates other than Dubai'
-                logger.info(f"Set MemberType based on ResidentFileNumber: {mapped['MemberType']}")
-            
-            # Set emirate values based on visa file number
-            if 'ResidentFileNumber' in mapped and mapped['ResidentFileNumber'] != self.DEFAULT_VALUE:
-                visa_file = mapped['ResidentFileNumber']
-                digits = ''.join(filter(str.isdigit, str(visa_file)))
-                
-                if digits.startswith('20'):  # Dubai
-                    if 'Emirate' in template_columns:
-                        mapped['Emirate'] = 'Dubai'
-                    if 'City' in template_columns:
-                        mapped['City'] = 'Dubai'
-                    if 'ResidentialLocation' in template_columns:
-                        mapped['ResidentialLocation'] = 'DUBAI (DISTRICT UNKNOWN)'
-                    if 'WorkLocation' in template_columns:
-                        mapped['WorkLocation'] = 'DUBAI (DISTRICT UNKNOWN)'
-                elif digits.startswith('10'):  # Abu Dhabi
-                    if 'Emirate' in template_columns:
-                        mapped['Emirate'] = 'Abu Dhabi'
-                    if 'City' in template_columns:
-                        mapped['City'] = 'Abu Dhabi'
-                    if 'ResidentialLocation' in template_columns:
-                        mapped['ResidentialLocation'] = 'Al Ain City'
-                    if 'WorkLocation' in template_columns:
-                        mapped['WorkLocation'] = 'Al Ain City'
-        
+
         else:
-            # If not Al Madallah, use general field mappings
+            # NAS template or other templates - use general field mappings (KEEP EXISTING LOGIC)
             for col in template_columns:
                 # Skip if already mapped and not default value
                 if col in mapped and mapped[col] != self.DEFAULT_VALUE:
@@ -3023,11 +3040,74 @@ class DataCombiner:
                 mapped.pop(key)
                 if key in field_mappings:
                     field_mappings.pop(key)
+
+        # FINAL CRITICAL VALIDATION AND RESTORATION
+        logger.info("=" * 80)
+        logger.info("FINAL VALIDATION AND DATA RESTORATION")
+        logger.info("=" * 80)
+        
+        # Ensure critical fields are never empty if we have the data
+        critical_fields_check = {
+            'First Name': ['first_name', 'First Name', 'FIRSTNAME', 'FirstName'],
+            'Middle Name': ['middle_name', 'Middle Name', 'MIDDLENAME', 'SecondName'],
+            'Last Name': ['last_name', 'Last Name', 'LASTNAME', 'LastName'],
+            'FIRSTNAME': ['first_name', 'First Name', 'FIRSTNAME', 'FirstName'],
+            'MIDDLENAME': ['middle_name', 'Middle Name', 'MIDDLENAME', 'SecondName'],
+            'LASTNAME': ['last_name', 'Last Name', 'LASTNAME', 'LastName'],
+            'FirstName': ['first_name', 'First Name', 'FIRSTNAME', 'FirstName'],
+            'SecondName': ['middle_name', 'Middle Name', 'MIDDLENAME', 'SecondName'],
+            'LastName': ['last_name', 'Last Name', 'LASTNAME', 'LastName'],
+            'StaffNo': ['staff_id', 'Staff ID'],
+            'Staff ID': ['staff_id', 'Staff ID'],
+            'EMPLOYEEID': ['staff_id', 'Staff ID'],
+            'Unified No': ['unified_no', 'Unified No'],
+            'UIDNO': ['unified_no', 'Unified No'],
+            'UIDNo': ['unified_no', 'Unified No'],
+            'Visa File Number': ['visa_file_number', 'Visa File Number'],
+            'VISAFILEREF': ['visa_file_number', 'Visa File Number'],
+            'ResidentFileNumber': ['visa_file_number', 'Visa File Number'],
+            'Emirates Id': ['emirates_id', 'Emirates Id'],
+            'EMIRATESID': ['emirates_id', 'Emirates Id'],
+            'EIDNumber': ['emirates_id', 'Emirates Id'],
+            'Passport No': ['passport_number', 'passport_no', 'Passport No'],
+            'PASSPORTNO': ['passport_number', 'passport_no', 'Passport No'],
+            'PassportNum': ['passport_number', 'passport_no', 'Passport No']
+        }
+        
+        for target_field, source_fields in critical_fields_check.items():
+            if target_field in template_columns:
+                if not mapped.get(target_field) or mapped.get(target_field) == "":
+                    # Try to find data from any source field
+                    for source_field in source_fields:
+                        if source_field in data and data[source_field] != self.DEFAULT_VALUE and data[source_field] != "":
+                            mapped[target_field] = data[source_field]
+                            logger.info(f"FINAL RESTORATION: {target_field} = {data[source_field]} (from {source_field})")
+                            break
                     
+                    # If still empty, log critical warning
+                    if not mapped.get(target_field) or mapped.get(target_field) == "":
+                        logger.warning(f"CRITICAL: {target_field} is still empty after all attempts!")
+
+        # ENSURE EFFECTIVE DATE IS SET
+        today_date = datetime.now().strftime('%d/%m/%Y')
+        effective_date_fields = ['Effective Date', 'EFFECTIVEDATE', 'EffectiveDate']
+        for field in effective_date_fields:
+            if field in template_columns:
+                mapped[field] = today_date
+                logger.info(f"Set {field} to {today_date}")
+
         # Final validation - ensure critical fields are preserved
         for field in ['Unified No', 'Visa File Number', 'Emirates Id', 'UIDNO', 'VISAFILEREF', 'EMIRATESID']:
             if field in mapped and mapped[field] != "" and mapped[field] != self.DEFAULT_VALUE:
                 logger.info(f"Final template output for {field}: {mapped[field]}")
+
+        # Log final mapping results for debugging
+        logger.info("FINAL MAPPED FIELDS:")
+        non_empty_fields = {k: v for k, v in mapped.items() if v and v != ""}
+        for field, value in sorted(non_empty_fields.items()):
+            logger.info(f"  {field}: {value}")
+
+        logger.info(f"Total non-empty fields: {len(non_empty_fields)}/{len(template_columns)}")
 
         # CRITICAL: Always return the mapped dictionary
         return mapped
@@ -3552,3 +3632,37 @@ class DataCombiner:
                         logger.info(f"RESTORED {output_field} = {extracted[extract_field]}")
         
         return result
+    
+    def _debug_template_mapping(self, data: Dict, template_columns: List[str], mapped: Dict):
+        """Debug function to track mapping issues."""
+        logger.info("=" * 80)
+        logger.info("TEMPLATE MAPPING DEBUG")
+        logger.info("=" * 80)
+        
+        logger.info(f"Input data fields: {len(data)}")
+        for k, v in data.items():
+            if v != self.DEFAULT_VALUE and v != "":
+                logger.info(f"  INPUT: {k} = {v}")
+        
+        logger.info(f"Template columns: {len(template_columns)}")
+        logger.info(f"Template columns: {template_columns}")
+        
+        logger.info(f"Mapped fields: {len([v for v in mapped.values() if v != ''])}")
+        for k, v in mapped.items():
+            if v != "":
+                logger.info(f"  MAPPED: {k} = {v}")
+        
+        # Check for missing mappings
+        missing_mappings = []
+        for k, v in data.items():
+            if v != self.DEFAULT_VALUE and v != "":
+                found_in_mapped = False
+                for mk, mv in mapped.items():
+                    if mv == v:
+                        found_in_mapped = True
+                        break
+                if not found_in_mapped:
+                    missing_mappings.append(f"{k}={v}")
+        
+        if missing_mappings:
+            logger.warning(f"POTENTIAL MISSING MAPPINGS: {missing_mappings}")
